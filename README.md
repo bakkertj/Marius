@@ -89,7 +89,7 @@ Folder tree when idle (drag a note or a whole folder to move it — links are re
 
 ## Install
 
-Requires Rust 1.88 or later (developed against 1.99).
+Requires Rust 1.89 or later (developed against 1.99).
 
 ```console
 $ cargo build --release

@@ -90,12 +90,12 @@ jobs:
       - run: cargo fmt --all --check
 
   msrv:
-    name: minimum supported Rust (1.88)
+    name: minimum supported Rust (1.89)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.89.0
       - uses: Swatinem/rust-cache@v2
-      # `rust-version` in Cargo.toml claims 1.88; this is what makes the claim
+      # `rust-version` in Cargo.toml claims 1.89; this is what makes the claim
       # true rather than aspirational.
       - run: cargo check --workspace
