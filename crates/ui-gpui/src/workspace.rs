@@ -18,7 +18,8 @@ use gpui::{
     actions, div, prelude::*, px, uniform_list, App, Context, Entity, FocusHandle, Focusable,
     KeyBinding, SharedString, Window,
 };
-use marius_core::{Marius, SearchOptions};
+use marius_core::{ExternalReport, Marius, SearchOptions};
+use marius_indexing::watch::VaultWatcher;
 use marius_model::{DocumentId, Provenance, Vault, VaultPath};
 
 use crate::editor::{Editor, EditorEvent};
@@ -229,6 +230,9 @@ pub struct Workspace {
     /// The open document's tags with real provenance, for the properties
     /// strip (UI-002, UI-010). One query per open, not per frame.
     open_tags: Vec<(SharedString, Provenance)>,
+    /// Debounced filesystem watcher (IM-010); `None` when the platform
+    /// refused one, in which case ⌘R stays the manual fallback.
+    watcher: Option<VaultWatcher>,
     focus_handle: FocusHandle,
 }
 
@@ -268,6 +272,28 @@ impl Workspace {
             .detach();
         window.focus(&search.focus_handle(cx));
 
+        // Follow edits other programs make (IM-010). Polled rather than
+        // event-driven into the UI thread: the watcher thread parks events
+        // in a channel, and a timer drains it — no cross-thread wakeups to
+        // reason about, and 600ms is far below anyone's reindex reflex.
+        let watcher = VaultWatcher::new(&vault.root, std::time::Duration::from_millis(400))
+            .map_err(|error| eprintln!("watch: {error} — falling back to manual reindex (⌘R)"))
+            .ok();
+        if watcher.is_some() {
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(600))
+                        .await;
+                    let Ok(()) = this.update(cx, |ws: &mut Workspace, cx| ws.poll_watcher(cx))
+                    else {
+                        break; // the workspace is gone; stop polling
+                    };
+                }
+            })
+            .detach();
+        }
+
         let mut this = Self {
             app,
             vault,
@@ -289,6 +315,7 @@ impl Workspace {
             status: "ready".into(),
             tag_counts: Vec::new(),
             open_tags: Vec::new(),
+            watcher,
             focus_handle: cx.focus_handle(),
         };
         this.refresh_results(cx);
@@ -471,6 +498,69 @@ impl Workspace {
     // -------------------------------------------------------------- opening
 
     /// Open a document in the editor, autosaving the previous one (MD-004).
+    /// Drain the filesystem watcher and fold external edits in (IM-010).
+    fn poll_watcher(&mut self, cx: &mut Context<Self>) {
+        let Some(changes) = self.watcher.as_ref().and_then(|w| w.try_changes()) else {
+            return;
+        };
+        let vault = self.vault.clone();
+        let report = self
+            .app
+            .borrow_mut()
+            .apply_external_changes(&vault, &changes);
+        match report {
+            Ok(report) => {
+                self.status = match report {
+                    ExternalReport::Indexed(n) => format!("synced {n} external change(s)").into(),
+                    ExternalReport::Reindexed(r) => format!(
+                        "reconciled external changes: {} added, {} modified, {} moved, {} removed",
+                        r.added, r.modified, r.moved, r.removed
+                    )
+                    .into(),
+                };
+            }
+            Err(error) => {
+                self.status = format!("watch: {error}").into();
+                cx.notify();
+                return;
+            }
+        }
+
+        // The picture changed under us: refresh what is derived from it.
+        self.rebuild_tree(cx);
+        self.refresh_tags();
+        // Force the result list to re-query whatever it currently shows.
+        self.applied_query = String::from("\u{0}refresh");
+        self.refresh_results(cx);
+
+        // Reload the open document only when the buffer holds nothing of
+        // the user's: their unsaved edits always win over the disk.
+        if let Some(id) = self.open_document {
+            let open_path_changed = changes
+                .paths
+                .iter()
+                .any(|p| p.as_str() == self.open_path.as_ref())
+                || changes.rescan;
+            if open_path_changed && !self.editor.read(cx).is_dirty() {
+                let text = {
+                    let app = self.app.borrow();
+                    app.document(id).and_then(|d| app.read(&d))
+                };
+                if let Ok(text) = text {
+                    self.editor
+                        .update(cx, |editor, cx| editor.set_text(&text, cx));
+                    if self.mode == ViewMode::Reading {
+                        let source = self.editor.read(cx).text().to_owned();
+                        self.preview
+                            .update(cx, |preview, cx| preview.set_source(&source, cx));
+                    }
+                }
+                self.refresh_open_tags();
+            }
+        }
+        cx.notify();
+    }
+
     fn open(&mut self, id: DocumentId, cx: &mut Context<Self>) {
         if self.open_document == Some(id) {
             return;

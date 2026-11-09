@@ -64,6 +64,16 @@ enum Command {
     /// Drop and rebuild every derived index, keeping all metadata.
     Rebuild,
 
+    /// Watch a vault and index external changes as they happen (IM-010).
+    /// Runs until interrupted.
+    Watch {
+        /// Vault name. Omit when exactly one vault is open.
+        vault: Option<String>,
+        /// Debounce window in milliseconds.
+        #[arg(long, default_value_t = 400)]
+        debounce: u64,
+    },
+
     /// Search across every vault.
     Search {
         /// Query. See `marius help-query` for the syntax.
@@ -241,6 +251,7 @@ fn run(cli: &Cli) -> Result<()> {
             render::index_reports(&reports, cli.json);
             Ok(())
         }
+        Command::Watch { vault, debounce } => watch_command(&mut app, vault.as_deref(), *debounce),
         Command::Search {
             query,
             limit,
@@ -522,6 +533,61 @@ fn tag_command(app: &mut Marius, command: &TagCommand, json: bool) -> Result<()>
             let assignments = app.document_tags(found.id)?;
             render::document_tags(&assignments, json);
             Ok(())
+        }
+    }
+}
+
+fn watch_command(app: &mut Marius, vault: Option<&str>, debounce_ms: u64) -> Result<()> {
+    let vault = match vault {
+        Some(name) => app.vault(name)?,
+        None => {
+            let mut vaults = app.vaults()?;
+            match vaults.len() {
+                0 => anyhow::bail!("no vaults registered"),
+                1 => vaults.remove(0),
+                _ => anyhow::bail!("several vaults are open; say which: `marius watch <name>`"),
+            }
+        }
+    };
+    if !vault.available {
+        anyhow::bail!(
+            "vault '{}' is not available at {}",
+            vault.name,
+            vault.root.display()
+        );
+    }
+
+    // Start from a consistent index, then follow events.
+    let report = app.index(&vault)?;
+    println!(
+        "{}: indexed ({} added, {} modified); watching {} — Ctrl-C stops",
+        vault.name,
+        report.added,
+        report.modified,
+        vault.root.display()
+    );
+
+    let watcher = marius_indexing::watch::VaultWatcher::new(
+        &vault.root,
+        std::time::Duration::from_millis(debounce_ms.max(50)),
+    )?;
+    loop {
+        let Some(changes) = watcher.changes_timeout(std::time::Duration::from_secs(1)) else {
+            continue;
+        };
+        match app.apply_external_changes(&vault, &changes)? {
+            marius_core::ExternalReport::Indexed(n) => {
+                for path in &changes.paths {
+                    println!("  {path}");
+                }
+                println!("indexed {n} change(s)");
+            }
+            marius_core::ExternalReport::Reindexed(report) => {
+                println!(
+                    "reconciled: {} added, {} modified, {} moved, {} removed",
+                    report.added, report.modified, report.moved, report.removed
+                );
+            }
         }
     }
 }

@@ -4,7 +4,7 @@ What works today, what is designed but not built, and what is next. Precise
 per-requirement status is in [TRACEABILITY.md](TRACEABILITY.md), which is
 checked against the specification on every `cargo test`.
 
-**As of this writing: 610 tests (533 core + 77 UI), zero clippy warnings, formatted.**
+**As of this writing: 619 tests (542 core + 77 UI), zero clippy warnings, formatted.**
 
 ## Platform position
 
@@ -75,6 +75,13 @@ every platform, since the file is created on the Mac. Three behaviours:
   drawable (GRAPH-014). Assembly (`core::graph`) and the deterministic
   force simulation (`ui-gpui/graph.rs`) are headlessly tested; the canvas
   is the thin part.
+- **Filesystem watching (IM-010)**: edits made by other programs — including
+  a `git pull` or a sync client — appear in the tree, tags and search within
+  a second, with no reindex. A batch containing an unfamiliar or vanished
+  path takes the full-reconcile road so an external rename keeps the
+  document's identity (AC-003, proven end-to-end in `core/tests/watch.rs`);
+  the open document is reloaded only when the buffer is clean — unsaved
+  edits always win over the disk. `marius watch` is the CLI face.
 - ⌘N creates a note named from the search box — `research/ideas/Title`
   creates the folders with it, the only honest way a folder is born in a
   Markdown vault (no empty-directory ghosts); Escape loops back to search.

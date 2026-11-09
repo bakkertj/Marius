@@ -256,6 +256,38 @@ impl Marius {
         Ok(report)
     }
 
+    /// Apply a settled batch of external filesystem changes (IM-010).
+    ///
+    /// Per-path indexing is only safe for paths that still exist *and*
+    /// are already indexed at that path — an unfamiliar new file may be
+    /// the destination of a rename (watchers often report only that side),
+    /// and a vanished file may be its origin. Both must go through full
+    /// reconciliation so content-hash move detection keeps the document's
+    /// identity (KB-006, AC-003). A platform-reported overflow also forces
+    /// the full pass.
+    pub fn apply_external_changes(
+        &mut self,
+        vault: &Vault,
+        changes: &marius_indexing::watch::ExternalChanges,
+    ) -> Result<ExternalReport> {
+        let per_path_safe = !changes.rescan
+            && changes.paths.iter().all(|path| {
+                path.to_fs(&vault.root).exists()
+                    && matches!(
+                        documents::by_path(self.db.conn(), vault.id, path),
+                        Ok(Some(_))
+                    )
+            });
+        if !per_path_safe {
+            return Ok(ExternalReport::Reindexed(self.index(vault)?));
+        }
+        let options = self.index_options(vault)?;
+        for path in &changes.paths {
+            indexer::index_path(&mut self.db, vault, path, &options)?;
+        }
+        Ok(ExternalReport::Indexed(changes.paths.len()))
+    }
+
     /// Discard journal history that is acknowledged and older than the
     /// configured retention window.
     ///
@@ -1206,6 +1238,15 @@ struct RewritePlan {
     /// spans address this exact string.
     text: String,
     edits: Vec<rewrite::Edit>,
+}
+
+/// What `apply_external_changes` did.
+#[derive(Debug)]
+pub enum ExternalReport {
+    /// Each changed path was indexed individually.
+    Indexed(usize),
+    /// Something vanished or overflowed; the vault was reconciled in full.
+    Reindexed(IndexReport),
 }
 
 /// A document and everything connected to it (GRAPH-005).

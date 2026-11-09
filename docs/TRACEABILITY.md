@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **103 done, 19 partial, 33 ready, 39 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **103 done, 20 partial, 33 ready, 38 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -88,7 +88,7 @@ Totals of 194 requirement IDs: **103 done, 19 partial, 33 ready, 39 open**. Ever
 | IM-007 | done | `scan::DEFAULT_IGNORED_DIRS`, aliases, wiki links | `ac_002_an_obsidian_style_vault_opens_without_conversion` |
 | IM-008 | open | `crates/import` | PDF/HTML/Word extraction not built. |
 | IM-009 | open | `crates/import` | `.eml` parsing not built; kind is modelled. |
-| IM-010 | open | — | Watched folders need `notify` wiring. |
+| IM-010 | partial | `indexing::watch`, `apply_external_changes`, `marius watch` | Watched folders done (GUI polls, CLI command, rename keeps identity — `core/tests/watch.rs`). Drag-in from Finder and clipboard capture remain. |
 | IM-011 | open | `crates/import` | `.mbox` not built. |
 | IM-012 | open | — | P2. |
 

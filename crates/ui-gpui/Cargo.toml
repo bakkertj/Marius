@@ -15,6 +15,7 @@ marius-core = { path = "../core" }
 marius-model = { path = "../model" }
 marius-markdown = { path = "../markdown" }
 marius-storage = { path = "../storage" }
+marius-indexing = { path = "../indexing" }
 anyhow = "1"
 unicode-segmentation = "1"
 pulldown-cmark = { version = "0.12", default-features = false }

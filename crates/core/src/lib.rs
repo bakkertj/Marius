@@ -4,7 +4,8 @@ pub mod graph;
 pub mod search;
 
 pub use app::{
-    CoreError, FolderMoveReport, MaintenanceReport, Marius, Neighbourhood, RenameReport,
+    CoreError, ExternalReport, FolderMoveReport, MaintenanceReport, Marius, Neighbourhood,
+    RenameReport,
 };
 pub use config::{Config, ConfigError};
 pub use graph::{EdgeStyle, GraphData, GraphEdge, GraphNode, GraphOptions};
