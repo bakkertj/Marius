@@ -180,15 +180,17 @@ fn encode_vector(vector: &[f32]) -> Vec<u8> {
 }
 
 fn decode_vector(bytes: &[u8]) -> std::result::Result<Vec<f32>, StorageError> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(StorageError::Corrupt(format!(
             "embedding blob is {} bytes, not a whole number of f32s",
             bytes.len()
         )));
     }
     Ok(bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect())
 }
 

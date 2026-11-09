@@ -355,16 +355,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // creating symlinks on Windows needs a privilege ordinary users lack
     fn symlinks_are_not_followed_by_default() {
         // Following them can leave the vault or loop forever.
         let dir = vault();
         let outside = tempfile::tempdir().unwrap();
         fs::write(outside.path().join("secret.md"), "elsewhere").unwrap();
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).unwrap();
-            let result = scan(dir.path(), &ScanOptions::default());
-            assert!(!paths(&result).iter().any(|p| p.contains("secret")));
-        }
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).unwrap();
+        let result = scan(dir.path(), &ScanOptions::default());
+        assert!(!paths(&result).iter().any(|p| p.contains("secret")));
     }
 }

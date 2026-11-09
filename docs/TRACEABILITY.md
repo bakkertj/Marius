@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **100 done, 20 partial, 33 ready, 41 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **103 done, 19 partial, 33 ready, 39 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -159,11 +159,11 @@ Totals of 194 requirement IDs: **100 done, 20 partial, 33 ready, 41 open**. Ever
 
 | ID | Status | Where | Test |
 |---|---|---|---|
-| GRAPH-001 | open | `crates/ui-gpui` | `core::neighbourhood` is the service behind it. |
+| GRAPH-001 | done | `core::graph`, `ui-gpui/graph_view.rs` | Force-directed canvas: zoom, pan, drag, hover, click-to-open (⌘G). `graph.rs` tests. |
 | GRAPH-002 | done | `relationships::{outgoing,incoming}` | `wiki_links_become_edges_and_backlinks` |
 | GRAPH-003 | done | `shared_tag_neighbours` | `shared_tags_are_computed_and_ranked_by_overlap` |
 | GRAPH-004 | done | `relationships::in_vaults` | `edges_can_be_filtered_by_kind_for_the_graph_view` |
-| GRAPH-005 | done | `core::neighbourhood`, `touching` | `ac_004...`, `marius graph` |
+| GRAPH-005 | done | `core::graph` focus+depth, `neighbourhood` | `local_graph_is_a_bounded_neighbourhood`; local/global toggle in the view. |
 | GRAPH-006 | partial | `tags::documents_with` | Data available; bipartite view needs the UI. |
 | GRAPH-007 | ready | `RelationshipKind::Semantic` | Stored, confidence-carrying, reversible. |
 | GRAPH-008 | done | `GlobalDocumentId`, no FK on endpoints | `graph_queries_see_cross_vault_edges_from_either_side` |
@@ -171,8 +171,8 @@ Totals of 194 requirement IDs: **100 done, 20 partial, 33 ready, 41 open**. Ever
 | GRAPH-010 | done | `relationships::{upsert,confirm,delete,reject}` | `confirming_an_edge_protects_it_from_re_inference` |
 | GRAPH-011 | done | `rejected_relationship` | `a_rejected_edge_is_not_reproposed_in_either_direction` |
 | GRAPH-012 | done | `replace_machine_edges` | `re_inference_replaces_stale_edges_but_keeps_confirmed_ones` |
-| GRAPH-013 | partial | `kind`, `provenance`, `confidence` on every edge | Data present; visual distinction needs the UI. |
-| GRAPH-014 | open | — | Needs the renderer. |
+| GRAPH-013 | done | `core::graph::EdgeStyle`, `graph_view.rs` | Explicit solid, inferred accent, co-tag faint; `global_graph_has_every_document_and_both_edge_sources`. |
+| GRAPH-014 | done | `GraphOptions::max_nodes`, breadth caps | `the_node_ceiling_keeps_the_best_connected_and_reports_truncation`; co-tag pairs skip broad tags. |
 | GRAPH-015 | partial | `Vault::available`, scoped queries | Honoured in search; graph previews need the UI. |
 | GRAPH-016 | open | — | P2. |
 

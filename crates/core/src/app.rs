@@ -67,7 +67,7 @@ pub enum CoreError {
     },
 }
 
-type Result<T> = std::result::Result<T, CoreError>;
+pub(crate) type Result<T> = std::result::Result<T, CoreError>;
 
 /// Refuse to author a path that would not open on every platform.
 ///
@@ -1078,6 +1078,17 @@ impl Marius {
             shared_tags,
             unresolved,
         })
+    }
+
+    /// The knowledge graph for one vault (GRAPH-001): nodes, styled edges,
+    /// and the local/global split, assembled from the stored relationships
+    /// and computed co-tag kinship. Drawing is the UI's job.
+    pub fn graph(
+        &self,
+        vault: VaultId,
+        options: &crate::graph::GraphOptions,
+    ) -> Result<crate::graph::GraphData> {
+        crate::graph::assemble(self.db.conn(), vault, options)
     }
 
     // ----------------------------------------------------- housekeeping

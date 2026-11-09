@@ -593,6 +593,52 @@ pub fn shared_tag_neighbours(
     Ok(rows)
 }
 
+/// Pairs of documents in `vault` that share at least one tag, for the
+/// global graph view (GRAPH-003). Computed on demand, never stored.
+///
+/// A tag carried by more than `per_tag_cap` documents is skipped: a broad
+/// topic tag on hundreds of notes produces a quadratic blow-up of edges that
+/// say nothing about any particular pair (GRAPH-014). Pairs are ranked by how
+/// many tags they share, capped at `limit`.
+pub fn co_tagged_in_vault(
+    conn: &Connection,
+    vault: VaultId,
+    per_tag_cap: u32,
+    limit: usize,
+) -> Result<Vec<(DocumentId, DocumentId, u64)>> {
+    let mut stmt = conn.prepare(
+        "WITH scoped AS (
+             SELECT dt.document_id AS doc, dt.tag_id AS tag
+             FROM document_tag dt
+             JOIN document d ON d.id = dt.document_id
+             WHERE d.vault_id = ?1
+         ),
+         narrow AS (
+             SELECT tag FROM scoped GROUP BY tag HAVING COUNT(*) BETWEEN 2 AND ?2
+         )
+         SELECT a.doc, b.doc, COUNT(*) AS shared
+         FROM scoped a
+         JOIN scoped b ON a.tag = b.tag AND a.doc < b.doc
+         JOIN narrow n ON n.tag = a.tag
+         GROUP BY a.doc, b.doc
+         ORDER BY shared DESC, a.doc, b.doc
+         LIMIT ?3",
+    )?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![vault.to_sql_blob(), per_tag_cap, limit as i64],
+            |row| {
+                Ok((
+                    id_from_row(row, 0)?,
+                    id_from_row(row, 1)?,
+                    row.get::<_, i64>(2)? as u64,
+                ))
+            },
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Record a `[[link]]` whose target does not exist yet (MD-007).
 pub fn add_pending_link(
     conn: &Connection,
@@ -1082,6 +1128,53 @@ mod tests {
 
         // And nothing was stored.
         assert_eq!(count(f.db.conn()).unwrap(), 0);
+    }
+
+    #[test]
+    fn co_tagged_pairs_skip_broad_tags_and_rank_by_overlap() {
+        // GRAPH-003 globally, GRAPH-014: a tag on more documents than the cap
+        // contributes no pairwise edges.
+        let f = fixture();
+        let c = add(&f.db, f.vault, "c.md");
+        let narrow =
+            tags::ensure(f.db.conn(), Some(f.vault), &TagName::new("niche").unwrap()).unwrap();
+        let narrow2 =
+            tags::ensure(f.db.conn(), Some(f.vault), &TagName::new("focus").unwrap()).unwrap();
+        let broad =
+            tags::ensure(f.db.conn(), Some(f.vault), &TagName::new("todo").unwrap()).unwrap();
+
+        // a and b share two narrow tags; everything carries the broad one.
+        for tag in [narrow.id, narrow2.id] {
+            tags::assign(f.db.conn(), &DocumentTag::manual(f.a.document, tag)).unwrap();
+            tags::assign(f.db.conn(), &DocumentTag::manual(f.b.document, tag)).unwrap();
+        }
+        for doc in [f.a.document, f.b.document, c.document] {
+            tags::assign(f.db.conn(), &DocumentTag::manual(doc, broad.id)).unwrap();
+        }
+
+        // Cap of 2 excludes "todo" (3 documents): only the a—b pair remains.
+        let pairs = co_tagged_in_vault(f.db.conn(), f.vault, 2, 10).unwrap();
+        assert_eq!(pairs.len(), 1);
+        let (x, y, shared) = pairs[0];
+        assert_eq!(shared, 2);
+        let mut got = [x, y];
+        got.sort();
+        let mut want = [f.a.document, f.b.document];
+        want.sort();
+        assert_eq!(got, want);
+
+        // With the cap lifted, the broad tag joins every pair once.
+        let pairs = co_tagged_in_vault(f.db.conn(), f.vault, 100, 10).unwrap();
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(pairs[0].2, 3); // a—b: niche + focus + todo
+
+        // The limit truncates from the top.
+        assert_eq!(
+            co_tagged_in_vault(f.db.conn(), f.vault, 100, 1)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

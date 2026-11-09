@@ -1,5 +1,7 @@
 pub mod buffer;
 pub mod editor;
+pub mod graph;
+pub mod graph_view;
 pub mod highlight;
 pub mod preview;
 pub mod theme;

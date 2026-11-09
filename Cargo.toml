@@ -23,7 +23,7 @@ exclude = ["crates/ui-gpui", "apps/desktop", "apps/sync-server"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.88"
 license = "Apache-2.0"
 authors = ["Marius contributors"]
 repository = "https://github.com/marius-pkm/marius"

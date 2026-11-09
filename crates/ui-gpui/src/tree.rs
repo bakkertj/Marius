@@ -154,13 +154,11 @@ mod tests {
                     collapsed,
                     documents,
                     ..
-                } => format!(
-                    "{}{} {}{}",
-                    "  ".repeat(*depth),
-                    if *collapsed { ">" } else { "v" },
-                    name,
-                    format!(" ({documents})"),
-                ),
+                } => {
+                    let indent = "  ".repeat(*depth);
+                    let chevron = if *collapsed { ">" } else { "v" };
+                    format!("{indent}{chevron} {name} ({documents})")
+                }
                 TreeRow::Document { title, depth, .. } => {
                     format!("{}- {}", "  ".repeat(*depth), title)
                 }

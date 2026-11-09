@@ -22,6 +22,7 @@ use marius_core::{Marius, SearchOptions};
 use marius_model::{DocumentId, Provenance, Vault, VaultPath};
 
 use crate::editor::{Editor, EditorEvent};
+use crate::graph_view::{GraphEvent, GraphView};
 use crate::highlight::LinkResolver;
 use crate::preview::{Preview, PreviewContext, PreviewEvent};
 use crate::theme::{Appearance, Theme};
@@ -35,7 +36,8 @@ actions!(
         NewNote,
         OpenSelected,
         ReindexVault,
-        ToggleReading
+        ToggleReading,
+        ToggleGraph
     ]
 );
 
@@ -59,6 +61,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-r")), ReindexVault, None),
         // Edit <-> rendered reading, the toggle every Markdown app shares.
         KeyBinding::new(key(format!("{primary}-e")), ToggleReading, None),
+        // The knowledge graph (GRAPH-001).
+        KeyBinding::new(key(format!("{primary}-g")), ToggleGraph, None),
     ]
 }
 
@@ -192,6 +196,8 @@ impl Render for DragGhost {
 enum ViewMode {
     Edit,
     Reading,
+    /// The knowledge graph (GRAPH-001), local or global (GRAPH-005).
+    Graph,
 }
 
 /// The root view.
@@ -204,6 +210,7 @@ pub struct Workspace {
     editor: Entity<Editor>,
     preview: Entity<Preview>,
     preview_base: Rc<VaultPreviewContext>,
+    graph: Entity<GraphView>,
     mode: ViewMode,
 
     rows: Vec<Row>,
@@ -251,6 +258,9 @@ impl Workspace {
             cx.new(|_| Preview::new(theme, Box::new(ForwardingContext(preview_base.clone()))));
         cx.subscribe_in(&preview, window, Self::on_preview_event)
             .detach();
+        let graph = cx.new(|_| GraphView::new(app.clone(), vault.id, theme));
+        cx.subscribe_in(&graph, window, Self::on_graph_event)
+            .detach();
 
         cx.subscribe_in(&search, window, Self::on_search_event)
             .detach();
@@ -266,6 +276,7 @@ impl Workspace {
             editor,
             preview,
             preview_base,
+            graph,
             mode: ViewMode::Edit,
             rows: Vec::new(),
             tree: Vec::new(),
@@ -682,13 +693,48 @@ impl Workspace {
                     .update(cx, |preview, cx| preview.set_source(&text, cx));
                 ViewMode::Reading
             }
-            ViewMode::Reading => {
+            ViewMode::Reading | ViewMode::Graph => {
                 let handle = self.editor.read(cx).focus_handle(cx);
                 window.focus(&handle);
                 ViewMode::Edit
             }
         };
         cx.notify();
+    }
+
+    fn on_toggle_graph(&mut self, _: &ToggleGraph, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = match self.mode {
+            ViewMode::Graph => {
+                let handle = self.editor.read(cx).focus_handle(cx);
+                window.focus(&handle);
+                ViewMode::Edit
+            }
+            _ => {
+                let focus = self.open_document;
+                self.graph.update(cx, |graph, cx| graph.show(focus, cx));
+                ViewMode::Graph
+            }
+        };
+        cx.notify();
+    }
+
+    fn on_graph_event(
+        &mut self,
+        _: &Entity<GraphView>,
+        event: &GraphEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            GraphEvent::Open(id) => {
+                // Clicking a node opens the document (GRAPH-001).
+                self.mode = ViewMode::Edit;
+                self.open(*id, cx);
+                let handle = self.editor.read(cx).focus_handle(cx);
+                window.focus(&handle);
+                cx.notify();
+            }
+        }
     }
 
     fn on_preview_event(
@@ -734,6 +780,9 @@ impl Workspace {
             .update(cx, |editor, cx| editor.set_theme(theme, cx));
         self.search
             .update(cx, |search, cx| search.set_theme(theme, cx));
+        self.preview
+            .update(cx, |preview, cx| preview.set_theme(theme, cx));
+        self.graph.update(cx, |graph, _| graph.set_theme(theme));
         cx.notify();
     }
 
@@ -1103,12 +1152,12 @@ impl Workspace {
                     .gap(px(14.))
                     .child(format!("ln {}, col {}", line + 1, column + 1))
                     .child(SharedString::from(format!(
-                        "{} · {} · ⌘K search · ⌘N new · ⌘S save · ⌘E {} · ⌘⇧L {}",
+                        "{} · {} · ⌘K search · ⌘N new · ⌘S save · ⌘E {} · ⌘G graph · ⌘⇧L {}",
                         self.vault.name,
                         self.status,
                         match self.mode {
                             ViewMode::Edit => "read",
-                            ViewMode::Reading => "edit",
+                            ViewMode::Reading | ViewMode::Graph => "edit",
                         },
                         self.theme.appearance.toggled().label(),
                     ))),
@@ -1138,6 +1187,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(Self::on_toggle_appearance))
             .on_action(cx.listener(Self::on_toggle_reading))
+            .on_action(cx.listener(Self::on_toggle_graph))
             .on_action(cx.listener(|this, _: &NewNote, window, cx| this.new_note(window, cx)))
             .on_action(cx.listener(|this, _: &ReindexVault, _w, cx| this.reindex(cx)))
             .flex()
@@ -1164,6 +1214,7 @@ impl Render for Workspace {
                             .child(div().flex_grow().min_h(px(0.)).child(match self.mode {
                                 ViewMode::Edit => self.editor.clone().into_any_element(),
                                 ViewMode::Reading => self.preview.clone().into_any_element(),
+                                ViewMode::Graph => self.graph.clone().into_any_element(),
                             })),
                     ),
             )

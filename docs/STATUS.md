@@ -4,15 +4,15 @@ What works today, what is designed but not built, and what is next. Precise
 per-requirement status is in [TRACEABILITY.md](TRACEABILITY.md), which is
 checked against the specification on every `cargo test`.
 
-**As of this writing: 596 tests (527 core + 69 UI), zero clippy warnings, formatted.**
+**As of this writing: 610 tests (533 core + 77 UI), zero clippy warnings, formatted.**
 
 ## Platform position
 
 | Platform | Core + CLI | Desktop UI |
 |---|---|---|
-| macOS | works (developed here) | not started |
-| Windows | should work; **unverified** — see below | not started |
-| Linux | should work; unverified | not started |
+| macOS | **verified in CI** (developed here) | works, interactively verified |
+| Windows | **verified in CI** — build + full test suite pass on `windows-latest` | untested (gpui Windows support is young) |
+| Linux | **verified in CI** (`ubuntu-latest`) | untested |
 
 The core is pure Rust with SQLite built from its bundled amalgamation, so there
 is no platform-specific code and no system dependency to install. Path handling
@@ -21,10 +21,11 @@ endings are preserved; the data directory follows `%APPDATA%` on Windows; the
 directory `fsync` after an atomic rename is skipped on Windows, where opening a
 directory as a file is not permitted, and that is non-fatal by construction.
 
-None of that is proof. `.github/workflows/ci.yml` builds, tests and smoke-tests
-the CLI on `windows-latest`, `macos-latest` and `ubuntu-latest` — Windows listed
-first because it is the platform that has not been run. Pushing the repository
-is what turns "should work" into a fact.
+`.github/workflows/ci.yml` builds, tests and smoke-tests the CLI on
+`windows-latest`, `macos-latest` and `ubuntu-latest`. The first push ran it:
+the build and the full test suite pass on all three. What remains unproven is
+the GPUI desktop app on Windows and Linux (it builds in a separate workspace
+that CI does not cover) and real day-to-day use of a vault on NTFS.
 
 ### Filenames that do not travel
 
@@ -65,6 +66,15 @@ every platform, since the file is created on the Mac. Three behaviours:
   planned before anything moves, refused whole on any collision, and the
   vacated directory chain is swept. Bare `[[wiki names]]` never need
   rewriting and are never touched.
+- **Knowledge graph (⌘G)**: a force-directed canvas of the vault — explicit
+  links solid, machine-proposed edges in accent, shared-tag kinship faint
+  (GRAPH-013); global and local views with an adjustable hop radius
+  (GRAPH-005); pan, zoom about the cursor, drag nodes (pinned while held),
+  hover for titles, click to open (GRAPH-001); node ceiling with
+  best-connected-survive truncation and broad-tag caps keep huge vaults
+  drawable (GRAPH-014). Assembly (`core::graph`) and the deterministic
+  force simulation (`ui-gpui/graph.rs`) are headlessly tested; the canvas
+  is the thin part.
 - ⌘N creates a note named from the search box — `research/ideas/Title`
   creates the folders with it, the only honest way a folder is born in a
   Markdown vault (no empty-directory ghosts); Escape loops back to search.
