@@ -1,0 +1,19 @@
+[package]
+name = "marius-markdown"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Markdown parsing for Marius: frontmatter, wiki links, inline tags, outline, chunking"
+
+[dependencies]
+marius-model = { workspace = true }
+pulldown-cmark = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

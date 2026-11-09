@@ -1,0 +1,19 @@
+Marius — a local-first personal knowledge management system
+Copyright 2026 The Marius contributors
+
+This product includes software developed as part of the Marius project,
+licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+Third-party dependencies retain their own licenses; run `cargo tree` or
+`cargo license` for the current set.
+
+Marius can load plugin packages written for other applications through an
+independently implemented compatibility layer (see docs/ARCHITECTURE.md).
+That layer is a clean-room implementation written against publicly documented
+behaviour. It contains no code from any other application, and loading a
+third-party plugin does not change that plugin's own license, which its author
+sets and which users must respect.
+
+The application is named for Marius Michel Pasha (1819-1907), a French sailor
+who, after being shipwrecked off the Ottoman coast, spent the rest of his life
+building lighthouses along it.

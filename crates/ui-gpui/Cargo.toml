@@ -1,0 +1,23 @@
+[package]
+name = "marius-ui"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "GPUI desktop interface for Marius"
+
+# Excluded from the root workspace; see apps/desktop/Cargo.toml.
+[workspace]
+
+[dependencies]
+gpui = "0.2.2"
+marius-core = { path = "../core" }
+marius-model = { path = "../model" }
+marius-markdown = { path = "../markdown" }
+marius-storage = { path = "../storage" }
+anyhow = "1"
+unicode-segmentation = "1"
+pulldown-cmark = { version = "0.12", default-features = false }
+
+[dev-dependencies]
+pretty_assertions = "1"

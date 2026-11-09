@@ -1,0 +1,22 @@
+[package]
+name = "marius-indexing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Vault scanning, durable file writes and the indexing pipeline for Marius"
+
+[dependencies]
+marius-model = { workspace = true }
+marius-markdown = { workspace = true }
+marius-storage = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

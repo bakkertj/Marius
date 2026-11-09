@@ -1,0 +1,19 @@
+[package]
+name = "marius-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Marius domain model: stable identities, documents, tags, relationships, policy"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+uuid = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

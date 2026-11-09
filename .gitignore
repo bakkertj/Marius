@@ -1,0 +1,16 @@
+/target/
+# The GPUI workspaces build outside the root workspace and are ~2.5 GB.
+/apps/desktop/target/
+/crates/ui-gpui/target/
+**/*.rs.bk
+*.pdb
+
+# Local Marius state, if anyone runs the CLI from inside the repo.
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Windows is listed first deliberately: it is the platform the project has
+  # not yet been run on, so it is the one whose result matters most.
+  test:
+    name: test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `rusqlite` is built with its bundled SQLite, so every platform compiles
+      # the amalgamation from C. No system SQLite is needed, which is the point.
+      - name: Build
+        run: cargo build --workspace --all-targets
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # A real end-to-end run against a scratch vault, because a passing unit
+      # suite does not prove the binary works on a platform.
+      - name: Smoke test the CLI (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/smoke/notes
+          printf '# Pharos\n\nIt stood at the harbour. #history\n\nSee [[other]].\n' \
+            > /tmp/smoke/notes/pharos.md
+          printf '# Other\n\nAnother note.\n' > /tmp/smoke/notes/other.md
+          BIN=./target/debug/marius
+          $BIN --data-dir /tmp/smoke/data vault add Smoke /tmp/smoke/notes
+          $BIN --data-dir /tmp/smoke/data search harbour | grep -q pharos
+          $BIN --data-dir /tmp/smoke/data search 'tag:history' | grep -q pharos
+          $BIN --data-dir /tmp/smoke/data graph pharos | grep -q other
+          $BIN --data-dir /tmp/smoke/data rename other renamed
+          grep -q 'renamed' /tmp/smoke/notes/pharos.md
+          $BIN --data-dir /tmp/smoke/data doctor | grep -q 'database:      ok'
+          echo "smoke test passed"
+
+      - name: Smoke test the CLI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path smoke\notes | Out-Null
+          Set-Content -Path smoke\notes\pharos.md -Value "# Pharos`n`nIt stood at the harbour. #history`n`nSee [[other]].`n"
+          Set-Content -Path smoke\notes\other.md -Value "# Other`n`nAnother note.`n"
+          $bin = ".\target\debug\marius.exe"
+          & $bin --data-dir smoke\data vault add Smoke smoke\notes
+          if ((& $bin --data-dir smoke\data search harbour) -notmatch 'pharos') { throw 'text search failed' }
+          if ((& $bin --data-dir smoke\data search 'tag:history') -notmatch 'pharos') { throw 'tag search failed' }
+          if ((& $bin --data-dir smoke\data graph pharos) -notmatch 'other') { throw 'graph failed' }
+          & $bin --data-dir smoke\data rename other renamed
+          if ((Get-Content smoke\notes\pharos.md -Raw) -notmatch 'renamed') { throw 'link rewrite failed' }
+          if ((& $bin --data-dir smoke\data doctor) -notmatch 'database:      ok') { throw 'doctor failed' }
+          Write-Host "smoke test passed"
+
+  fmt:
+    name: formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  msrv:
+    name: minimum supported Rust (1.80)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.80.0
+      - uses: Swatinem/rust-cache@v2
+      # `rust-version` in Cargo.toml claims 1.80; this is what makes the claim
+      # true rather than aspirational.
+      - run: cargo check --workspace

@@ -1,0 +1,77 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/model",
+    "crates/markdown",
+    "crates/storage",
+    "crates/indexing",
+    "crates/search",
+    "crates/graph",
+    "crates/llm",
+    "crates/llm-policy",
+    "crates/classification",
+    "crates/embeddings",
+    "crates/import",
+    "crates/core",
+    "apps/cli",
+]
+# `crates/ui-gpui`, `apps/desktop` and `apps/sync-server` are deliberately not
+# default members: GPUI is a fast-moving git dependency and the sync service
+# belongs to a later delivery phase. See docs/ARCHITECTURE.md.
+exclude = ["crates/ui-gpui", "apps/desktop", "apps/sync-server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+authors = ["Marius contributors"]
+repository = "https://github.com/marius-pkm/marius"
+description = "Marius — a local-first personal knowledge management system"
+
+[workspace.dependencies]
+marius-model = { path = "crates/model" }
+marius-markdown = { path = "crates/markdown" }
+marius-storage = { path = "crates/storage" }
+marius-indexing = { path = "crates/indexing" }
+marius-search = { path = "crates/search" }
+marius-graph = { path = "crates/graph" }
+marius-llm = { path = "crates/llm" }
+marius-llm-policy = { path = "crates/llm-policy" }
+marius-classification = { path = "crates/classification" }
+marius-embeddings = { path = "crates/embeddings" }
+marius-import = { path = "crates/import" }
+marius-core = { path = "crates/core" }
+
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "serde-well-known"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+blake3 = "1"
+rusqlite = { version = "0.32", features = ["bundled", "backup", "functions"] }
+pulldown-cmark = { version = "0.12", default-features = false, features = ["simd", "html"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+notify = "7"
+notify-debouncer-full = "0.4"
+walkdir = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+rayon = "1"
+regex = "1"
+unicode-normalization = "0.1"
+tempfile = "3"
+pretty_assertions = "1"
+insta = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+# Fast enough to run the test suite on a large synthetic vault.
+opt-level = 1

@@ -1,0 +1,24 @@
+[package]
+name = "marius-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Marius application services: vaults, documents, search and the graph"
+
+[dependencies]
+marius-model = { workspace = true }
+marius-markdown = { workspace = true }
+marius-storage = { workspace = true }
+marius-indexing = { workspace = true }
+marius-search = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

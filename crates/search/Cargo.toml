@@ -1,0 +1,18 @@
+[package]
+name = "marius-search"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Query parsing, filters and result fusion for Marius"
+
+[dependencies]
+marius-model = { workspace = true }
+marius-storage = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

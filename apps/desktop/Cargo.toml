@@ -1,0 +1,27 @@
+[package]
+name = "marius-desktop"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Marius desktop application"
+
+# Its own workspace, separate from the core. GPUI is a young 0.x crate with 95
+# dependencies and 2.5 GB of build artefacts; core development should not pay
+# that, and a GPUI breakage must never fail `cargo test --workspace`.
+#
+# `crates/ui-gpui` is an ordinary path dependency rather than a member: a
+# member has to live below the workspace root, and the layout the
+# specification asks for puts it above this one.
+[workspace]
+
+[[bin]]
+name = "marius-desktop"
+path = "src/main.rs"
+
+[dependencies]
+gpui = "0.2.2"
+marius-ui = { path = "../../crates/ui-gpui" }
+marius-core = { path = "../../crates/core" }
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }

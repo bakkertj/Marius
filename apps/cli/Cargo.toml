@@ -1,0 +1,29 @@
+[package]
+name = "marius-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Command-line interface for Marius"
+
+[[bin]]
+name = "marius"
+path = "src/main.rs"
+
+[dependencies]
+marius-core = { workspace = true }
+marius-model = { workspace = true }
+marius-storage = { workspace = true }
+marius-indexing = { workspace = true }
+marius-search = { workspace = true }
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
