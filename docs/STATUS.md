@@ -75,6 +75,11 @@ every platform, since the file is created on the Mac. Three behaviours:
   drawable (GRAPH-014). Assembly (`core::graph`) and the deterministic
   force simulation (`ui-gpui/graph.rs`) are headlessly tested; the canvas
   is the thin part.
+- **Tabs and a saved workspace**: ⌘⇧T opens a tab (each with its own
+  live buffer — switching never drops unsaved work), ⌘W closes (saving
+  first; the last tab empties instead), ⌃Tab cycles; the strip shows
+  dirty dots and appears only with two or more tabs. The open tabs,
+  the active one and the zoom persist per vault and resume at launch.
 - **Command palette (⌘⇧P)**: fuzzy-ranked access to every built-in
   action and every enabled plugin's commands; **backlinks panel (⌘B)**
   with links-in, links-out, co-tag kin and unresolved targets, each a

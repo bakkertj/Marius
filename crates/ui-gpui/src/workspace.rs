@@ -45,7 +45,11 @@ actions!(
         ZoomOut,
         ZoomReset,
         OpenPalette,
-        ToggleBacklinks
+        ToggleBacklinks,
+        NewTab,
+        CloseTab,
+        NextTab,
+        PreviousTab
     ]
 );
 
@@ -84,9 +88,22 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-shift-p")), OpenPalette, None),
         // Backlinks and related notes for the open document (UI-005).
         KeyBinding::new(key(format!("{primary}-b")), ToggleBacklinks, None),
+        // Tabs (UI-006).
+        KeyBinding::new(key(format!("{primary}-shift-t")), NewTab, None),
+        KeyBinding::new(key(format!("{primary}-w")), CloseTab, None),
+        KeyBinding::new("ctrl-tab", NextTab, None),
+        KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
         // The knowledge graph (GRAPH-001).
         KeyBinding::new(key(format!("{primary}-g")), ToggleGraph, None),
     ]
+}
+
+/// One open tab (UI-006): its own editor entity, so switching tabs
+/// costs nothing and unsaved buffers survive the switch.
+struct Tab {
+    editor: Entity<Editor>,
+    document: Option<DocumentId>,
+    title: SharedString,
 }
 
 /// One palette entry: a label and what running it means.
@@ -99,6 +116,8 @@ struct PaletteItem {
 #[derive(Clone)]
 enum PaletteAction {
     NewNote,
+    NewTab,
+    CloseTab,
     DailyNote,
     NewFromTemplate(String),
     Reindex,
@@ -263,7 +282,12 @@ pub struct Workspace {
     theme: Theme,
 
     search: Entity<Editor>,
+    /// The ACTIVE tab's editor — a mirror of `tabs[active_tab].editor`,
+    /// kept as its own field so the rest of the workspace reads one
+    /// place.
     editor: Entity<Editor>,
+    tabs: Vec<Tab>,
+    active_tab: usize,
     preview: Entity<Preview>,
     preview_base: Rc<VaultPreviewContext>,
     graph: Entity<GraphView>,
@@ -388,7 +412,13 @@ impl Workspace {
             vault,
             theme,
             search,
-            editor,
+            editor: editor.clone(),
+            tabs: vec![Tab {
+                editor,
+                document: None,
+                title: "untitled".into(),
+            }],
+            active_tab: 0,
             preview,
             preview_base,
             graph,
@@ -420,8 +450,46 @@ impl Workspace {
         };
         this.refresh_results(cx);
         this.refresh_tags();
-        if let Some(first) = this.rows.first().map(|r| r.id) {
-            this.open(first, cx);
+
+        // Resume the saved workspace (UI-006): the tabs, the active one
+        // and the zoom from last time, when they belong to this vault.
+        let saved = this.app.borrow().config().ui_state.clone();
+        let restored = match saved {
+            Some(state) if state.vault == this.vault.name && !state.tabs.is_empty() => {
+                this.zoom = (state.zoom_percent as f32 / 100.0).clamp(0.6, 2.4);
+                let zoom = this.zoom;
+                this.preview
+                    .update(cx, |preview, cx| preview.set_zoom(zoom, cx));
+                let mut opened = 0usize;
+                for (index, path) in state.tabs.iter().enumerate() {
+                    let id = VaultPath::new(path.clone()).ok().and_then(|path| {
+                        this.app
+                            .borrow()
+                            .document_at(this.vault.id, &path)
+                            .ok()
+                            .flatten()
+                            .map(|d| d.id)
+                    });
+                    let Some(id) = id else { continue };
+                    if opened > 0 {
+                        this.new_tab(window, cx);
+                    }
+                    this.open(id, cx);
+                    opened += 1;
+                    let _ = index;
+                }
+                if opened > 0 {
+                    let active = state.active_tab.min(this.tabs.len() - 1);
+                    this.activate_tab(active, window, cx);
+                }
+                opened > 0
+            }
+            _ => false,
+        };
+        if !restored {
+            if let Some(first) = this.rows.first().map(|r| r.id) {
+                this.open(first, cx);
+            }
         }
         this
     }
@@ -828,11 +896,17 @@ impl Workspace {
                 self.editor
                     .update(cx, |editor, cx| editor.set_text(&text, cx));
                 self.open_document = Some(id);
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    tab.document = Some(id);
+                }
                 {
                     let app = self.app.borrow();
                     if let Ok(document) = app.document(id) {
                         self.open_path = document.path.to_string().into();
                         self.open_title = document.title.clone().into();
+                        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                            tab.title = document.title.clone().into();
+                        }
                     }
                 }
                 if let Some(row) = self.rows.iter().position(|r| r.id == id) {
@@ -850,6 +924,7 @@ impl Workspace {
                     self.preview
                         .update(cx, |preview, cx| preview.set_source(&text, cx));
                 }
+                self.persist_ui_state();
             }
             Err(error) => self.status = format!("open: {error}").into(),
         }
@@ -1073,6 +1148,8 @@ impl Workspace {
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut items = vec![
             ("New note", PaletteAction::NewNote),
+            ("New tab", PaletteAction::NewTab),
+            ("Close tab", PaletteAction::CloseTab),
             ("Open today's daily note", PaletteAction::DailyNote),
             ("Save document", PaletteAction::Save),
             ("Suggest tags for this note", PaletteAction::SuggestTags),
@@ -1190,6 +1267,8 @@ impl Workspace {
     ) {
         match action {
             PaletteAction::NewNote => self.new_note(window, cx),
+            PaletteAction::NewTab => self.new_tab(window, cx),
+            PaletteAction::CloseTab => self.close_tab(self.active_tab, window, cx),
             PaletteAction::DailyNote => {
                 let vault = self.vault.clone();
                 let result = self.app.borrow_mut().daily_note(&vault);
@@ -1256,6 +1335,121 @@ impl Workspace {
         }
     }
 
+    /// A fresh tab with its own editor, activated immediately (UI-006).
+    fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let theme = self.theme;
+        let resolver = Box::new(VaultResolver {
+            app: self.app.clone(),
+            vault: self.vault.id,
+            cache: RefCell::new(HashMap::new()),
+        });
+        let editor = cx.new(|cx| Editor::new(cx, theme, resolver));
+        cx.subscribe_in(&editor, window, Self::on_editor_event)
+            .detach();
+        self.tabs.push(Tab {
+            editor,
+            document: None,
+            title: "untitled".into(),
+        });
+        let index = self.tabs.len() - 1;
+        self.activate_tab(index, window, cx);
+    }
+
+    fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        self.active_tab = index;
+        self.editor = tab.editor.clone();
+        self.open_document = tab.document;
+        // Re-derive the active-document chrome from the tab.
+        match tab.document {
+            Some(id) => {
+                let app = self.app.borrow();
+                if let Ok(document) = app.document(id) {
+                    self.open_path = document.path.to_string().into();
+                    self.open_title = document.title.clone().into();
+                    *self.preview_base.base.borrow_mut() = Some(document.path);
+                }
+            }
+            None => {
+                self.open_path = "no document".into();
+                self.open_title = "Marius".into();
+            }
+        }
+        self.refresh_open_tags();
+        if matches!(self.mode, ViewMode::Reading | ViewMode::Split) {
+            let text = self.editor.read(cx).text().to_owned();
+            self.preview
+                .update(cx, |preview, cx| preview.set_source(&text, cx));
+        }
+        let handle = self.editor.read(cx).focus_handle(cx);
+        window.focus(&handle);
+        self.persist_ui_state();
+        cx.notify();
+    }
+
+    /// Close a tab, saving its unsaved work first; the last tab empties
+    /// instead of closing — a workspace always has somewhere to type.
+    fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() <= 1 {
+            if let Some(tab) = self.tabs.first() {
+                let editor = tab.editor.clone();
+                self.save_tab(&editor, self.tabs[0].document, cx);
+                editor.update(cx, |editor, cx| editor.set_text("", cx));
+            }
+            self.tabs[0].document = None;
+            self.tabs[0].title = "untitled".into();
+            self.activate_tab(0, window, cx);
+            return;
+        }
+        let tab = self.tabs.remove(index);
+        self.save_tab(&tab.editor, tab.document, cx);
+        let next = index.min(self.tabs.len() - 1);
+        self.activate_tab(next, window, cx);
+    }
+
+    /// Autosave one tab's buffer, active or not.
+    fn save_tab(
+        &mut self,
+        editor: &Entity<Editor>,
+        document: Option<DocumentId>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = document else { return };
+        if !editor.read(cx).is_dirty() {
+            return;
+        }
+        let text = editor.read(cx).text().to_owned();
+        if let Err(error) = self.app.borrow_mut().save_document(id, &text) {
+            self.status = format!("save: {error}").into();
+        } else {
+            editor.update(cx, |editor, cx| editor.mark_saved(cx));
+        }
+    }
+
+    /// Remember the open tabs, the active one and the zoom, per vault,
+    /// so the next launch resumes where this one stood (UI-006's saved
+    /// workspace).
+    fn persist_ui_state(&self) {
+        let mut app = self.app.borrow_mut();
+        let mut config = app.config().clone();
+        let paths: Vec<String> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.document)
+            .filter_map(|id| app.document(id).ok())
+            .map(|d| d.path.to_string())
+            .collect();
+        config.ui_state = Some(marius_core::config::UiState {
+            vault: self.vault.name.clone(),
+            tabs: paths,
+            active_tab: self.active_tab,
+            zoom_percent: (self.zoom * 100.0).round() as u32,
+        });
+        let _ = app.set_config(config);
+    }
+
     fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
         let zoom = (zoom * 10.0).round() / 10.0;
         self.zoom = zoom.clamp(0.6, 2.4);
@@ -1267,6 +1461,7 @@ impl Workspace {
         } else {
             format!("zoom {:.0}%", zoom * 100.0).into()
         };
+        self.persist_ui_state();
         cx.notify();
     }
 
@@ -1714,6 +1909,79 @@ impl Workspace {
     /// The open document's identity and tags, colour-coded by provenance:
     /// green is yours, amber is a model's unreviewed proposal, blue is a
     /// proposal you accepted (UI-010).
+    /// The tab strip (UI-006): title, dirty dot, close; + for a fresh
+    /// tab. One tab renders no strip — a single document needs no chrome.
+    fn render_tabs(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if self.tabs.len() <= 1 {
+            return None;
+        }
+        let theme = self.theme;
+        let mut bar = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .bg(theme.background)
+            .border_b_1()
+            .border_color(theme.border)
+            .px(px(6.))
+            .gap(px(2.));
+        for (index, tab) in self.tabs.iter().enumerate() {
+            let active = index == self.active_tab;
+            let dirty = tab.editor.read(cx).is_dirty();
+            let label: SharedString =
+                format!("{}{}", tab.title, if dirty { " ●" } else { "" }).into();
+            bar =
+                bar.child(
+                    div()
+                        .id(("tab", index))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .px(px(10.))
+                        .py(px(4.))
+                        .text_size(px(12.))
+                        .rounded_t(px(5.))
+                        .when(active, |d| {
+                            d.bg(theme.surface)
+                                .text_color(theme.text)
+                                .border_t_2()
+                                .border_color(theme.accent)
+                        })
+                        .when(!active, |d| d.text_color(theme.muted))
+                        .hover(|d| d.bg(theme.hover))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.activate_tab(index, window, cx)
+                        }))
+                        .child(label)
+                        .child(
+                            div()
+                                .id(("tabx", index))
+                                .text_color(theme.muted)
+                                .hover(|d| d.text_color(theme.text))
+                                .child("×")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.close_tab(index, window, cx)
+                                })),
+                        ),
+                );
+        }
+        bar = bar.child(
+            div()
+                .id("tab-plus")
+                .px(px(8.))
+                .py(px(2.))
+                .text_color(theme.muted)
+                .hover(|d| d.text_color(theme.text))
+                .cursor_pointer()
+                .child("+")
+                .on_click(cx.listener(|this, _, window, cx| this.new_tab(window, cx))),
+        );
+        Some(bar.into_any_element())
+    }
+
     fn render_properties(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let title = self.open_title.clone();
@@ -2125,6 +2393,19 @@ impl Render for Workspace {
                 this.refresh_neighbourhood();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                this.close_tab(this.active_tab, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NextTab, window, cx| {
+                let next = (this.active_tab + 1) % this.tabs.len().max(1);
+                this.activate_tab(next, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PreviousTab, window, cx| {
+                let count = this.tabs.len().max(1);
+                let previous = (this.active_tab + count - 1) % count;
+                this.activate_tab(previous, window, cx);
+            }))
             .on_action(cx.listener(Self::on_toggle_graph))
             .on_action(cx.listener(|this, _: &NewNote, window, cx| this.new_note(window, cx)))
             .on_action(cx.listener(|this, _: &ReindexVault, _w, cx| this.reindex(cx)))
@@ -2148,6 +2429,7 @@ impl Render for Workspace {
                             .flex_grow()
                             .h_full()
                             .min_w(px(0.))
+                            .children(self.render_tabs(cx))
                             .child(self.render_properties(cx))
                             .child(
                                 div()

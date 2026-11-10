@@ -100,6 +100,18 @@ pub struct ModelSettings {
     pub relationship_discovery: Option<ModelChoice>,
 }
 
+/// Where the desktop interface left off (UI-006's saved workspace):
+/// the open tabs, the active one and the zoom, remembered per vault.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiState {
+    pub vault: String,
+    /// Vault-relative paths of the open tabs, in order.
+    pub tabs: Vec<String>,
+    pub active_tab: usize,
+    /// Percent, because an integer keeps `Config: Eq`.
+    pub zoom_percent: u32,
+}
+
 /// User preferences.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
@@ -134,6 +146,10 @@ pub struct Config {
     /// up recovery, it does not merely economise.
     #[serde(default = "default_revision_body_kib")]
     pub revision_body_limit_kib: u64,
+    /// The desktop session to restore (UI-006). Absent until the app
+    /// has run once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_state: Option<UiState>,
     /// Folder for daily notes (MD-011), relative to each vault root.
     #[serde(default = "default_daily_folder")]
     pub daily_folder: String,
@@ -180,6 +196,7 @@ impl Default for Config {
             cross_vault_links: false,
             chunk_on_index: false,
             record_revisions: true,
+            ui_state: None,
             daily_folder: default_daily_folder(),
             templates_folder: default_templates_folder(),
             revision_body_limit_kib: default_revision_body_kib(),
