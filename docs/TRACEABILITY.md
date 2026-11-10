@@ -122,7 +122,7 @@ Totals of 194 requirement IDs: **154 done, 15 partial, 4 ready, 21 open**. Every
 | AI-003 | done | `ModelSettings`, `marius model set` | Independent model per task, exercised by tagging, embedding and Q&A. |
 | AI-004 | done | everything above | `ac_017_everything_essential_works_with_no_network` |
 | AI-005 | done | `llm-policy::locality_permitted` | `the_locality_table_is_exactly_as_documented` |
-| AI-006 | done | `ProviderProfile::trusted_for_personal`, `--trusted` | `personal_content_needs_trust_to_go_remote` |
+| AI-006 | done | `ProviderProfile::trusted_for_personal`, `--trusted`, settings toggle | `personal_content_needs_trust_to_go_remote`, `a_trusted_remote_model_passes_policy_for_personal_notes` |
 | AI-007 | done | `Sensitivity::default`, `VaultPolicy::effective` | `a_sensitivity_declared_in_frontmatter_...only_tightens` |
 | AI-008 | done | `Sensitivity::across` | `strictest_level_wins_across_a_prompt` |
 | AI-009 | done | `Authorship`, `Provenance` | Enforced in storage, not just intended. |

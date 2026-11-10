@@ -157,7 +157,16 @@ impl SettingsView {
                 self.status = if cleared {
                     format!("{} cleared (provider and model were blank)", self.task).into()
                 } else {
-                    format!("{} saved", self.task).into()
+                    format!(
+                        "{} saved ({})",
+                        self.task,
+                        if self.trusted {
+                            "trusted with personal notes"
+                        } else {
+                            "not trusted with personal notes"
+                        }
+                    )
+                    .into()
                 };
             }
             Err(error) => self.status = format!("save: {error}").into(),
@@ -464,6 +473,12 @@ impl gpui::Render for SettingsView {
                                 cx,
                                 Box::new(|this, _w, cx| {
                                     this.trusted = !this.trusted;
+                                    // The sensitivity chips below apply
+                                    // instantly; this one cannot (it is
+                                    // part of the model form), so say so.
+                                    this.status = "not applied yet — \
+                                                   click 'Save this task'"
+                                        .into();
                                     cx.notify();
                                 }),
                             ))
