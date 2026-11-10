@@ -71,7 +71,19 @@ pub(crate) fn apply_smime(
             }
             front.push_str("encrypted: smime\n");
         }
-        None => {}
+        None => {
+            // A p7m that would not parse deserves a visible trace, not
+            // silence — it is where the body of a signed message lives.
+            if body_markdown.trim().is_empty()
+                && attachments
+                    .iter()
+                    .any(|a| a.file_name.to_ascii_lowercase().ends_with(".p7m"))
+            {
+                *body_markdown = "This message carries an S/MIME wrapper that could not \
+                                  be parsed; its content remains inside the attachment."
+                    .to_owned();
+            }
+        }
     }
 }
 
