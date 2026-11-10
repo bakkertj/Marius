@@ -2657,12 +2657,31 @@ impl Workspace {
                 div()
                     .flex()
                     .flex_row()
+                    .items_center()
                     .gap(px(14.))
+                    .min_w(px(0.))
                     .child(format!("ln {}, col {}", line + 1, column + 1))
+                    .child(
+                        // The status gets its own hoverable segment: the
+                        // footer truncates a long error, and hovering it
+                        // shows the whole message in a tooltip.
+                        div()
+                            .id("status-message")
+                            .max_w(px(560.))
+                            .truncate()
+                            .child(SharedString::from(format!(
+                                "{} · {}",
+                                self.vault.name, self.status
+                            )))
+                            .when(!self.status.is_empty(), |d| {
+                                d.tooltip(crate::tip::TextTip::build(
+                                    self.status.clone(),
+                                    theme,
+                                ))
+                            }),
+                    )
                     .child(SharedString::from(format!(
-                        "{} · {} · {PRIMARY}K search · {PRIMARY_SHIFT}P commands · {PRIMARY}E {} · {PRIMARY_SHIFT}E split · {PRIMARY}G graph · {PRIMARY}T tags · {PRIMARY_SHIFT}L {}",
-                        self.vault.name,
-                        self.status,
+                        "{PRIMARY}K search · {PRIMARY_SHIFT}P commands · {PRIMARY}E {} · {PRIMARY_SHIFT}E split · {PRIMARY}G graph · {PRIMARY}T tags · {PRIMARY_SHIFT}L {}",
                         match self.mode {
                             ViewMode::Edit => "read",
                             ViewMode::Reading | ViewMode::Split | ViewMode::Graph | ViewMode::Settings => "edit",

@@ -7,5 +7,6 @@ pub mod palette;
 pub mod preview;
 pub mod settings;
 pub mod theme;
+pub mod tip;
 pub mod tree;
 pub mod workspace;
