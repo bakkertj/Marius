@@ -141,3 +141,38 @@ fn openai_compatible_speaks_the_other_protocol_and_sends_the_key() {
     );
     assert!(sent.contains("\"max_tokens\":64"));
 }
+
+#[test]
+fn ollama_embeddings_batch_and_count_check() {
+    use marius_llm::EmbeddingProvider;
+    let (base, server) = one_shot(
+        "200 OK",
+        r#"{"model":"nomic-embed-text","embeddings":[[0.1,0.2],[0.3,0.4]]}"#,
+    );
+    let vectors = Ollama::new(base)
+        .embed("nomic-embed-text", &["first", "second"])
+        .unwrap();
+    assert_eq!(vectors, vec![vec![0.1, 0.2], vec![0.3, 0.4]]);
+    let sent = server.join().unwrap();
+    assert!(sent.starts_with("POST /api/embed"));
+    assert!(sent.contains(r#""input":["first","second"]"#));
+
+    // A count mismatch is a protocol error, not a silent misalignment.
+    let (base, _server) = one_shot("200 OK", r#"{"embeddings":[[0.1]]}"#);
+    let error = Ollama::new(base).embed("m", &["a", "b"]).unwrap_err();
+    assert!(matches!(error, LlmError::Protocol { .. }));
+}
+
+#[test]
+fn openai_embeddings_honour_the_index_field() {
+    use marius_llm::EmbeddingProvider;
+    // Out-of-order data array — the index field is authoritative.
+    let (base, server) = one_shot(
+        "200 OK",
+        r#"{"data":[{"index":1,"embedding":[9.0]},{"index":0,"embedding":[1.0]}],"model":"text-embedding"}"#,
+    );
+    let provider = OpenAiCompatible::new("x", base, Locality::Remote, None);
+    let vectors = provider.embed("text-embedding", &["a", "b"]).unwrap();
+    assert_eq!(vectors, vec![vec![1.0], vec![9.0]]);
+    assert!(server.join().unwrap().starts_with("POST /embeddings"));
+}

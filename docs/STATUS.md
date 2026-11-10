@@ -136,6 +136,18 @@ line.
   approve/reject`; rejections remain durable against reclassification.
   Adapters: Ollama (verified against a live daemon) and OpenAI-compatible
   (OpenRouter/self-hosted), keys by environment-variable name only.
+- **Semantic and hybrid search, and grounded Q&A** — `marius embed` chunks
+  and embeds a vault (idempotent: staleness follows the content hash, the
+  embedding space is keyed by model and dimensions, and a model change
+  starts the space afresh); `marius search --mode semantic|hybrid` ranks by
+  cosine or fuses with BM25 by reciprocal rank; `marius ask` answers a
+  question from the notes alone — numbered passages in, `[n]`-cited prose
+  out, invented citations dropped, and an off-topic question refused
+  *before* any model call rather than improvised over. Policy applies per
+  document when embedding (a confidential note in a permissive vault is
+  skipped, not sent) and the strictest retrieved source governs a question
+  (AI-008). The protocol is proven over real loopback sockets; a live
+  quality run awaits a real instruct/embedding model in the local daemon.
 
 ## Designed and stored for, but not built
 
@@ -148,9 +160,6 @@ requires revisiting the four invariants.
   semantic search, summarisation, grounded Q&A and relationship discovery
   still await their components; the policy engine and audit log they must
   pass through are already in place.
-- **Embeddings and semantic search.** Chunking, chunk storage, vectors keyed by
-  embedding space, staleness detection and cosine similarity are done. There is
-  no embedding client and no hybrid ranking.
 - **Generated notes and grounded Q&A.** `GeneratedNoteProvenance`, `Citation`,
   `Claim` and `ClaimSupport` exist, including the rule that a user-edited note
   is never regenerated in place. No generator.

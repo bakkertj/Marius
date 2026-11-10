@@ -128,3 +128,61 @@ impl ChatProvider for OpenAiCompatible {
         })
     }
 }
+
+impl crate::EmbeddingProvider for OpenAiCompatible {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn locality(&self) -> Locality {
+        self.locality
+    }
+
+    fn embed(&self, model: &str, texts: &[&str]) -> Result<Vec<Vec<f32>>, LlmError> {
+        let endpoint = format!("{}/embeddings", self.base_url);
+        #[derive(Deserialize)]
+        struct Reply {
+            data: Vec<Datum>,
+        }
+        #[derive(Deserialize)]
+        struct Datum {
+            index: usize,
+            embedding: Vec<f32>,
+        }
+        let mut call = self
+            .client
+            .post(&endpoint)
+            .json(&json!({ "model": model, "input": texts }));
+        if let Some(key) = &self.api_key {
+            call = call.bearer_auth(key);
+        }
+        let response = call.send().map_err(|source| LlmError::Unreachable {
+            endpoint: endpoint.clone(),
+            source,
+        })?;
+        let reply: Reply = crate::ollama::check(&endpoint, response)?;
+        if reply.data.len() != texts.len() {
+            return Err(LlmError::Protocol {
+                endpoint,
+                detail: format!(
+                    "{} inputs produced {} vectors",
+                    texts.len(),
+                    reply.data.len()
+                ),
+            });
+        }
+        // The API documents an index field precisely because order is not
+        // promised; honour it.
+        let mut out = vec![Vec::new(); texts.len()];
+        for datum in reply.data {
+            let Some(slot) = out.get_mut(datum.index) else {
+                return Err(LlmError::Protocol {
+                    endpoint,
+                    detail: format!("vector index {} out of range", datum.index),
+                });
+            };
+            *slot = datum.embedding;
+        }
+        Ok(out)
+    }
+}

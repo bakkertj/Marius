@@ -12,6 +12,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod qa;
+
 use marius_llm::ChatRequest;
 use marius_model::{Confidence, TagName};
 

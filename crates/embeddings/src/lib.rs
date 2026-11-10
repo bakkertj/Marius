@@ -1,19 +1,151 @@
-//! # Embedding generation and vector retrieval
+//! # Vector ranking and hybrid fusion
 //!
-//! Turns passages into vectors and answers similarity queries.
-//!
-//! Requirements: SRCH-007, SRCH-009, SRCH-013.
-//!
-//! Not yet implemented. The storage and invalidation rules are:
-//! `marius-markdown`'s `chunk` module produces passages whose spans quote the
-//! document exactly, `marius_storage::chunks` stores vectors keyed by
-//! embedding space so two models' vectors are never compared, and
-//! `stale_chunks` finds passages whose vector was computed from a different
-//! content hash. `marius_model::cosine_similarity` is the comparison. What is
-//! missing is the client that calls a model, and the hybrid fusion that
-//! combines vector scores with BM25 relevance.
-//!
-//! See `docs/STATUS.md` for what is built and `docs/TRACEABILITY.md` for the
-//! per-requirement position.
+//! The pure half of semantic search (SRCH-007, SRCH-009): given a query
+//! vector and stored chunk embeddings, rank passages; given two ranked
+//! lists, fuse them. The halves that do I/O — chunking documents, calling
+//! an embedding model, the policy gate, the audit row — live in
+//! `marius-core`, which is also where the tests that exercise them live.
 
 #![forbid(unsafe_code)]
+
+use std::collections::HashMap;
+
+use marius_model::{cosine_similarity, ChunkEmbedding, ChunkId, DocumentId};
+
+/// One passage, scored against a query.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RankedChunk {
+    pub chunk: ChunkId,
+    pub document: DocumentId,
+    /// Cosine similarity, `-1.0..=1.0`.
+    pub score: f32,
+}
+
+/// Rank every stored vector against the query, best first.
+///
+/// Vectors from a different space (wrong dimension) are skipped, not
+/// scored: `cosine_similarity` returns `None` for them, and a zero would
+/// quietly bury a configuration bug in the middle of the ranking.
+pub fn rank(query: &[f32], embeddings: &[ChunkEmbedding]) -> Vec<RankedChunk> {
+    let mut out: Vec<RankedChunk> = embeddings
+        .iter()
+        .filter_map(|e| {
+            cosine_similarity(query, &e.vector).map(|score| RankedChunk {
+                chunk: e.chunk,
+                document: e.document,
+                score,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.score.total_cmp(&a.score));
+    out
+}
+
+/// Collapse a chunk ranking to one entry per document — its best passage —
+/// preserving score order. Documents are the unit of search results;
+/// chunks are the unit of citation.
+pub fn best_per_document(ranked: &[RankedChunk]) -> Vec<RankedChunk> {
+    let mut seen: HashMap<DocumentId, ()> = HashMap::new();
+    ranked
+        .iter()
+        .filter(|r| seen.insert(r.document, ()).is_none())
+        .cloned()
+        .collect()
+}
+
+/// Reciprocal-rank fusion of several rankings (SRCH-009).
+///
+/// `k` damps the head of each list; 60.0 is the value from the original
+/// RRF paper and nobody has needed another. Items missing from a list
+/// simply contribute nothing from it — RRF needs no score calibration
+/// between BM25 and cosine, which is exactly why it is used here.
+pub fn fuse_reciprocal_rank(lists: &[&[DocumentId]], k: f64) -> Vec<(DocumentId, f64)> {
+    let mut scores: HashMap<DocumentId, f64> = HashMap::new();
+    let mut first_seen: HashMap<DocumentId, usize> = HashMap::new();
+    let mut order = 0usize;
+    for list in lists {
+        for (rank, id) in list.iter().enumerate() {
+            *scores.entry(*id).or_insert(0.0) += 1.0 / (k + rank as f64 + 1.0);
+            first_seen.entry(*id).or_insert_with(|| {
+                order += 1;
+                order
+            });
+        }
+    }
+    let mut out: Vec<(DocumentId, f64)> = scores.into_iter().collect();
+    // Deterministic: ties break by first appearance, not HashMap order.
+    out.sort_by(|a, b| {
+        b.1.total_cmp(&a.1)
+            .then_with(|| first_seen[&a.0].cmp(&first_seen[&b.0]))
+    });
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marius_model::{ContentHash, EmbeddingModel};
+    use time::OffsetDateTime;
+
+    fn embedding(document: DocumentId, vector: Vec<f32>) -> ChunkEmbedding {
+        ChunkEmbedding {
+            chunk: ChunkId::new(),
+            document,
+            model: EmbeddingModel::new("test", vector.len()),
+            source_hash: ContentHash::of(b"x"),
+            vector,
+            computed_at: OffsetDateTime::now_utc(),
+        }
+    }
+
+    #[test]
+    fn ranking_orders_by_similarity_and_skips_misfits() {
+        let a = DocumentId::new();
+        let b = DocumentId::new();
+        let stored = vec![
+            embedding(a, vec![0.0, 1.0]),
+            embedding(b, vec![1.0, 0.0]),
+            embedding(b, vec![0.5, 0.5, 0.5]), // wrong dimension: skipped
+        ];
+        let ranked = rank(&[1.0, 0.05], &stored);
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].document, b);
+        assert!(ranked[0].score > 0.9);
+    }
+
+    #[test]
+    fn one_result_per_document_keeps_the_best_chunk() {
+        let a = DocumentId::new();
+        let b = DocumentId::new();
+        let stored = vec![
+            embedding(a, vec![1.0, 0.0]),
+            embedding(a, vec![0.9, 0.1]),
+            embedding(b, vec![0.0, 1.0]),
+        ];
+        let best = best_per_document(&rank(&[1.0, 0.0], &stored));
+        assert_eq!(best.len(), 2);
+        assert_eq!(best[0].document, a);
+        assert_eq!(best[0].score, 1.0, "the better of a's two chunks");
+    }
+
+    #[test]
+    fn fusion_rewards_agreement_between_rankings() {
+        let a = DocumentId::new(); // top of keyword, missing from semantic
+        let b = DocumentId::new(); // mid in both
+        let c = DocumentId::new(); // top of semantic, missing from keyword
+        let keyword = [a, b];
+        let semantic = [c, b];
+        let fused = fuse_reciprocal_rank(&[&keyword, &semantic], 60.0);
+        assert_eq!(fused[0].0, b, "agreement beats one first place");
+        // The two single-list items tie exactly; first appearance wins.
+        assert_eq!(fused[1].0, a);
+        assert_eq!(fused[2].0, c);
+    }
+
+    #[test]
+    fn fusion_of_empty_lists_is_empty() {
+        assert!(fuse_reciprocal_rank(&[], 60.0).is_empty());
+        let empty: [DocumentId; 0] = [];
+        assert!(fuse_reciprocal_rank(&[&empty, &empty], 60.0).is_empty());
+    }
+}

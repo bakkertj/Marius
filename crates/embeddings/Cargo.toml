@@ -5,5 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Vector ranking and keyword/semantic fusion for hybrid search"
 
 [dependencies]
+marius-model = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+time = { workspace = true }

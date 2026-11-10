@@ -10,6 +10,7 @@
 //! and says so in the revision it records. Nothing here is reachable from the
 //! classifier or from an inference result.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use marius_indexing::indexer::{self, IndexOptions, IndexReport};
@@ -22,7 +23,7 @@ use marius_model::{
 };
 use marius_model::{GlobalDocumentId, InferenceOutcome, InferenceRecord, InferenceTask};
 use marius_search::Query;
-use marius_storage::inference;
+use marius_storage::{chunks, inference};
 use marius_storage::{
     documents, relationships, revisions, search_index, tags, Database, StorageError,
 };
@@ -467,6 +468,18 @@ impl Marius {
     /// Archive or unarchive a document (KB-012).
     pub fn set_archived(&mut self, id: DocumentId, archived: bool) -> Result<()> {
         Ok(documents::set_archived(self.db.conn(), id, archived)?)
+    }
+
+    /// Set or clear a document's sensitivity override (SEC-005). The
+    /// effective level can only be *tightened* by this — the vault floor
+    /// still applies underneath (AI-007).
+    pub fn set_document_sensitivity(
+        &mut self,
+        id: DocumentId,
+        sensitivity: Option<marius_model::Sensitivity>,
+    ) -> Result<()> {
+        self.document(id)?; // NoSuchDocument beats a silent no-op
+        Ok(documents::set_sensitivity(self.db.conn(), id, sensitivity)?)
     }
 
     // ------------------------------------------------- rename and move
@@ -1137,8 +1150,6 @@ impl Marius {
     /// `ai_generated`/unreviewed assignments; rejected and pinned tags are
     /// skipped by the storage gate, not by hope (TAG-006, TAG-012).
     pub fn suggest_tags(&mut self, id: DocumentId, apply: bool) -> Result<SuggestedTags> {
-        use marius_llm::ChatProvider;
-
         let document = self.document(id)?;
         let text = self.read(&document)?;
         let policy = self.vault_policy(document.vault)?;
@@ -1191,49 +1202,18 @@ impl Marius {
         let request =
             marius_classification::tagging_request(&document.title, &text, &vocabulary, 8);
 
-        let client: Box<dyn ChatProvider> = match profile.name.as_str() {
-            "ollama" => Box::new(marius_llm::ollama::Ollama::new(
-                choice
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| marius_llm::ollama::DEFAULT_BASE_URL.to_owned()),
-            )),
-            _ => {
-                // Credential by name from the environment; the platform
-                // keystore is the intended home, the environment is the
-                // portable least common denominator (SEC-001: the config
-                // holds the *name*, never the key).
-                let key = match &choice.credential {
-                    Some(name) => match std::env::var(name) {
-                        Ok(key) => Some(key),
-                        Err(_) => {
-                            let reason =
-                                format!("credential {name:?} is not set in the environment");
-                            let mut record = InferenceRecord::denied(
-                                InferenceTask::Tagging,
-                                sensitivity,
-                                vec![global],
-                                reason.clone(),
-                            );
-                            record.outcome = InferenceOutcome::NoEligibleProvider;
-                            inference::record(self.db.conn(), &record)?;
-                            return Ok(SuggestedTags::refused(record, reason));
-                        }
-                    },
-                    None => None,
-                };
-                let base = choice.base_url.clone().ok_or_else(|| {
-                    CoreError::Inference(format!(
-                        "provider {:?} needs a base_url in the configuration",
-                        profile.name
-                    ))
-                })?;
-                Box::new(marius_llm::openai::OpenAiCompatible::new(
-                    profile.name.clone(),
-                    base,
-                    profile.locality,
-                    key,
-                ))
+        let client = match build_client(&choice, &profile) {
+            Ok(client) => client,
+            Err(reason) => {
+                let mut record = InferenceRecord::denied(
+                    InferenceTask::Tagging,
+                    sensitivity,
+                    vec![global],
+                    reason.clone(),
+                );
+                record.outcome = InferenceOutcome::NoEligibleProvider;
+                inference::record(self.db.conn(), &record)?;
+                return Ok(SuggestedTags::refused(record, reason));
             }
         };
 
@@ -1250,7 +1230,7 @@ impl Marius {
         record.locality = Some(profile.locality);
         record.started_at = started;
 
-        match client.chat(&choice.model, &request) {
+        match client.chat_with(&choice.model, &request) {
             Ok(response) => {
                 record.outcome = InferenceOutcome::Completed;
                 record.reason = format!("tagging via {}", profile.name);
@@ -1288,6 +1268,538 @@ impl Marius {
                     suggestions,
                     applied,
                     skipped,
+                })
+            }
+            Err(error) => {
+                record.outcome = InferenceOutcome::ProviderError;
+                record.reason = error.to_string();
+                record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+                inference::record(self.db.conn(), &record)?;
+                Err(CoreError::Inference(error.to_string()))
+            }
+        }
+    }
+
+    /// Chunk and embed every permitted document in a vault (SRCH-007,
+    /// SRCH-013). Idempotent: a vector computed from the document's current
+    /// content hash in the current embedding space is left alone, so a
+    /// second run after one edit embeds one document's passages.
+    ///
+    /// Policy runs *per document* — one confidential note in a permissive
+    /// vault is skipped, not sent (AI-008's spirit at the corpus level) —
+    /// and the whole run becomes audit rows: one for what was embedded,
+    /// one per refusal reason for what was not.
+    pub fn embed_vault(&mut self, vault: &Vault) -> Result<EmbedReport> {
+        let policy = self.vault_policy(vault.id)?;
+        let Some(choice) = self.config.models.embedding.clone() else {
+            let reason = "no provider is configured for embedding".to_owned();
+            let mut record = InferenceRecord::denied(
+                InferenceTask::Embedding,
+                policy.default_sensitivity,
+                vec![],
+                reason.clone(),
+            );
+            record.outcome = InferenceOutcome::NoEligibleProvider;
+            inference::record(self.db.conn(), &record)?;
+            return Ok(EmbedReport {
+                refusal: Some(reason),
+                ..EmbedReport::default()
+            });
+        };
+        let profile = choice.profile();
+
+        let client = match build_client(&choice, &profile) {
+            Ok(client) => client,
+            Err(reason) => {
+                let mut record = InferenceRecord::denied(
+                    InferenceTask::Embedding,
+                    policy.default_sensitivity,
+                    vec![],
+                    reason.clone(),
+                );
+                record.outcome = InferenceOutcome::NoEligibleProvider;
+                inference::record(self.db.conn(), &record)?;
+                return Ok(EmbedReport {
+                    refusal: Some(reason),
+                    ..EmbedReport::default()
+                });
+            }
+        };
+
+        let filter = documents::Filter {
+            vaults: vec![vault.id],
+            kinds: vec![DocumentKind::Markdown],
+            ..Default::default()
+        };
+        let mut report = EmbedReport::default();
+        let mut embedded_docs: Vec<GlobalDocumentId> = Vec::new();
+        let mut refusals: BTreeMap<String, Vec<GlobalDocumentId>> = BTreeMap::new();
+        let mut space: Option<marius_model::EmbeddingModel> = None;
+        let started = OffsetDateTime::now_utc();
+        let clock = std::time::Instant::now();
+
+        for document in documents::list(self.db.conn(), &filter)? {
+            let sensitivity = policy.effective(document.sensitivity);
+            let decision = marius_llm_policy::decide(
+                &policy,
+                InferenceTask::Embedding,
+                sensitivity,
+                std::slice::from_ref(&profile),
+            );
+            let global = GlobalDocumentId::new(document.vault, document.id);
+            if decision.approved().is_none() {
+                report.skipped_policy += 1;
+                refusals
+                    .entry(decision.reason().to_owned())
+                    .or_default()
+                    .push(global);
+                continue;
+            }
+
+            let text = self.read(&document)?;
+            self.ensure_chunks(&document, &text)?;
+
+            // The embedding space is named by its dimensions, which only
+            // the first response reveals (SRCH-013's space key).
+            let model = match &space {
+                Some(model) => model.clone(),
+                None => {
+                    let probe = ClientKind::embed_with(&client, &choice.model, &["marius"])
+                        .map_err(|e| self.record_embed_failure(&policy, &e, started, &clock))?;
+                    let dims = probe.first().map(Vec::len).unwrap_or(0);
+                    let model = marius_model::EmbeddingModel::new(
+                        format!("{}/{}", profile.name, choice.model),
+                        dims,
+                    );
+                    // Vectors from another model or dimension are not
+                    // comparable; a model change starts the space afresh.
+                    chunks::drop_other_spaces(self.db.conn(), &model)?;
+                    space = Some(model.clone());
+                    model
+                }
+            };
+
+            let stale =
+                chunks::stale_chunks(self.db.conn(), document.id, &model, &document.content_hash)?;
+            if stale.is_empty() {
+                report.up_to_date += 1;
+                continue;
+            }
+            for batch in stale.chunks(16) {
+                let texts: Vec<&str> = batch.iter().map(|c| c.text.as_str()).collect();
+                let vectors = ClientKind::embed_with(&client, &choice.model, &texts)
+                    .map_err(|e| self.record_embed_failure(&policy, &e, started, &clock))?;
+                for (chunk, vector) in batch.iter().zip(vectors) {
+                    chunks::put_embedding(
+                        self.db.conn(),
+                        &chunks::embedding_for(chunk, &model, document.content_hash, vector),
+                    )?;
+                }
+                report.chunks_embedded += batch.len();
+            }
+            report.documents += 1;
+            embedded_docs.push(global);
+        }
+
+        // The run's audit rows (AI-015): what went, and what was refused.
+        if !embedded_docs.is_empty() || refusals.is_empty() {
+            let mut record = InferenceRecord::denied(
+                InferenceTask::Embedding,
+                policy.default_sensitivity,
+                embedded_docs.clone(),
+                format!(
+                    "embedded {} passage(s) across {} document(s)",
+                    report.chunks_embedded, report.documents
+                ),
+            );
+            record.provider = Some(profile.name.clone());
+            record.model = Some(choice.model.clone());
+            record.locality = Some(profile.locality);
+            record.outcome = InferenceOutcome::Completed;
+            record.started_at = started;
+            record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+            inference::record(self.db.conn(), &record)?;
+        }
+        for (reason, documents) in refusals {
+            let record = InferenceRecord::denied(
+                InferenceTask::Embedding,
+                policy.default_sensitivity,
+                documents,
+                reason,
+            );
+            inference::record(self.db.conn(), &record)?;
+        }
+        Ok(report)
+    }
+
+    fn record_embed_failure(
+        &self,
+        policy: &VaultPolicy,
+        error: &marius_llm::LlmError,
+        started: OffsetDateTime,
+        clock: &std::time::Instant,
+    ) -> CoreError {
+        let mut record = InferenceRecord::denied(
+            InferenceTask::Embedding,
+            policy.default_sensitivity,
+            vec![],
+            error.to_string(),
+        );
+        record.outcome = InferenceOutcome::ProviderError;
+        record.started_at = started;
+        record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+        let _ = inference::record(self.db.conn(), &record);
+        CoreError::Inference(error.to_string())
+    }
+
+    /// Make sure a document's stored passages describe its current text.
+    fn ensure_chunks(&mut self, document: &Document, text: &str) -> Result<()> {
+        let current = chunks::of_document(self.db.conn(), document.id)?;
+        let fresh = !current.is_empty()
+            && current.iter().all(|c| {
+                text.get(c.byte_start..c.byte_end)
+                    .is_some_and(|span| span == c.text)
+            });
+        if fresh {
+            return Ok(());
+        }
+        let parsed = marius_markdown::ParsedDocument::parse(text);
+        let drafts = marius_markdown::chunk::chunk(
+            text,
+            &parsed.outline,
+            &marius_markdown::chunk::ChunkConfig::default(),
+        );
+        let fresh: Vec<marius_model::Chunk> = drafts
+            .into_iter()
+            .map(|d| d.into_chunk(document.id))
+            .collect();
+        chunks::replace(self.db.conn(), document.id, &fresh)?;
+        Ok(())
+    }
+
+    /// Semantic retrieval (SRCH-007): the question embedded in the same
+    /// space as the vault, ranked by cosine, one hit per document.
+    ///
+    /// Returns the ranked passages and, when nothing could run, the
+    /// refusal in audit-log words (AI-004: an explanation, not an error).
+    pub fn semantic_search(
+        &mut self,
+        query: &str,
+        vault: VaultId,
+        limit: usize,
+    ) -> Result<SemanticResults> {
+        let policy = self.vault_policy(vault)?;
+        let Some(choice) = self.config.models.embedding.clone() else {
+            return Ok(SemanticResults::refused(
+                "no provider is configured for embedding".to_owned(),
+            ));
+        };
+        let profile = choice.profile();
+        // The query is the user's own words, typed just now: vault floor.
+        let decision = marius_llm_policy::decide(
+            &policy,
+            InferenceTask::Embedding,
+            policy.default_sensitivity,
+            std::slice::from_ref(&profile),
+        );
+        if decision.approved().is_none() {
+            let mut record = InferenceRecord::denied(
+                InferenceTask::Embedding,
+                policy.default_sensitivity,
+                vec![],
+                decision.reason().to_owned(),
+            );
+            if matches!(
+                decision,
+                marius_llm_policy::Decision::NoEligibleProvider { .. }
+            ) {
+                record.outcome = InferenceOutcome::NoEligibleProvider;
+            }
+            inference::record(self.db.conn(), &record)?;
+            return Ok(SemanticResults::refused(decision.reason().to_owned()));
+        }
+        let client = match build_client(&choice, &profile) {
+            Ok(client) => client,
+            Err(reason) => return Ok(SemanticResults::refused(reason)),
+        };
+
+        let started = OffsetDateTime::now_utc();
+        let clock = std::time::Instant::now();
+        let vectors = match ClientKind::embed_with(&client, &choice.model, &[query]) {
+            Ok(vectors) => vectors,
+            Err(error) => return Err(self.record_embed_failure(&policy, &error, started, &clock)),
+        };
+        let Some(query_vector) = vectors.into_iter().next() else {
+            return Ok(SemanticResults::refused(
+                "provider returned no vector".into(),
+            ));
+        };
+        let mut record = InferenceRecord::denied(
+            InferenceTask::Embedding,
+            policy.default_sensitivity,
+            vec![],
+            "query embedding for semantic search".to_owned(),
+        );
+        record.provider = Some(profile.name.clone());
+        record.model = Some(choice.model.clone());
+        record.locality = Some(profile.locality);
+        record.outcome = InferenceOutcome::Completed;
+        record.started_at = started;
+        record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+        inference::record(self.db.conn(), &record)?;
+
+        let model = marius_model::EmbeddingModel::new(
+            format!("{}/{}", profile.name, choice.model),
+            query_vector.len(),
+        );
+        let stored = chunks::embeddings_in_space(self.db.conn(), &model)?;
+        let ranked = marius_embeddings::rank(&query_vector, &stored);
+        let best = marius_embeddings::best_per_document(&ranked);
+
+        let vault_record = self.vault_by_id(vault)?;
+        let mut hits = Vec::new();
+        for entry in best {
+            if hits.len() == limit {
+                break;
+            }
+            // Vectors can outlive their vault scope; resolve and filter.
+            let Some(document) = documents::get(self.db.conn(), entry.document)? else {
+                continue;
+            };
+            if document.vault != vault {
+                continue;
+            }
+            let Some(chunk) = chunks::get(self.db.conn(), entry.chunk)? else {
+                continue;
+            };
+            hits.push(SemanticHit {
+                document,
+                vault_name: vault_record.name.clone(),
+                chunk,
+                score: entry.score,
+            });
+        }
+        Ok(SemanticResults {
+            hits,
+            refusal: None,
+        })
+    }
+
+    /// Hybrid retrieval (SRCH-009): keyword and semantic rankings fused by
+    /// reciprocal rank, so agreement between the two beats either alone and
+    /// no score calibration between BM25 and cosine is needed.
+    pub fn hybrid_search(
+        &mut self,
+        query: &str,
+        vault: VaultId,
+        limit: usize,
+    ) -> Result<SemanticResults> {
+        let keyword = {
+            let options = SearchOptions {
+                limit: limit.max(20),
+                ..SearchOptions::default()
+            };
+            self.search(query, options)?
+        };
+        let semantic = self.semantic_search(query, vault, limit.max(20))?;
+        if semantic.refusal.is_some() && keyword.hits.is_empty() {
+            return Ok(semantic);
+        }
+
+        let keyword_ranked: Vec<DocumentId> = keyword
+            .hits
+            .iter()
+            .filter(|h| h.document.vault == vault)
+            .map(|h| h.document.id)
+            .collect();
+        let semantic_ranked: Vec<DocumentId> =
+            semantic.hits.iter().map(|h| h.document.id).collect();
+        let fused =
+            marius_embeddings::fuse_reciprocal_rank(&[&keyword_ranked, &semantic_ranked], 60.0);
+
+        let by_id: std::collections::HashMap<DocumentId, &SemanticHit> =
+            semantic.hits.iter().map(|h| (h.document.id, h)).collect();
+        let vault_record = self.vault_by_id(vault)?;
+        let mut hits = Vec::new();
+        for (id, _score) in fused.into_iter().take(limit) {
+            if let Some(hit) = by_id.get(&id) {
+                hits.push((*hit).clone());
+                continue;
+            }
+            // Keyword-only hit: synthesise a passage from the stored text.
+            let Some(document) = documents::get(self.db.conn(), id)? else {
+                continue;
+            };
+            let snippet = keyword
+                .hits
+                .iter()
+                .find(|h| h.document.id == id)
+                .and_then(|h| h.snippet.clone())
+                .unwrap_or_default();
+            hits.push(SemanticHit {
+                document,
+                vault_name: vault_record.name.clone(),
+                chunk: marius_model::Chunk {
+                    id: marius_model::ChunkId::new(),
+                    document: id,
+                    ordinal: 0,
+                    byte_start: 0,
+                    byte_end: 0,
+                    heading_path: Vec::new(),
+                    text: snippet,
+                },
+                score: 0.0,
+            });
+        }
+        Ok(SemanticResults {
+            hits,
+            refusal: semantic.refusal,
+        })
+    }
+
+    /// Answer a question from the vault's own notes (SRCH-010..012,
+    /// AC-008): retrieve semantically, show the model numbered passages,
+    /// demand citations, and surface "the notes do not say" instead of
+    /// letting the model improvise.
+    ///
+    /// The request's sensitivity is the strictest level across every
+    /// *retrieved* document (AI-008): one confidential source in the
+    /// context restricts the whole question.
+    pub fn ask(&mut self, question: &str, vault: VaultId) -> Result<GroundedAnswer> {
+        const PASSAGES: usize = 6;
+        /// Below this cosine similarity a passage is noise, and sending
+        /// noise to a model invites a confident answer about nothing
+        /// (SRCH-011).
+        const FLOOR: f32 = 0.25;
+
+        let retrieved = self.semantic_search(question, vault, PASSAGES)?;
+        if let Some(refusal) = retrieved.refusal {
+            return Ok(GroundedAnswer::refused(refusal));
+        }
+        let relevant: Vec<&SemanticHit> =
+            retrieved.hits.iter().filter(|h| h.score >= FLOOR).collect();
+        if relevant.is_empty() {
+            return Ok(GroundedAnswer::unanswered(
+                "no sufficiently relevant notes were found; the index may need `marius embed`",
+            ));
+        }
+
+        let policy = self.vault_policy(vault)?;
+        let sensitivity = marius_model::Sensitivity::across(
+            relevant
+                .iter()
+                .map(|h| policy.effective(h.document.sensitivity)),
+        );
+        let documents: Vec<GlobalDocumentId> = relevant
+            .iter()
+            .map(|h| GlobalDocumentId::new(h.document.vault, h.document.id))
+            .collect();
+
+        let Some(choice) = self.config.models.question_answering.clone() else {
+            let reason = "no provider is configured for question_answering".to_owned();
+            let mut record = InferenceRecord::denied(
+                InferenceTask::QuestionAnswering,
+                sensitivity,
+                documents,
+                reason.clone(),
+            );
+            record.outcome = InferenceOutcome::NoEligibleProvider;
+            inference::record(self.db.conn(), &record)?;
+            return Ok(GroundedAnswer::refused(reason));
+        };
+        let profile = choice.profile();
+        let decision = marius_llm_policy::decide(
+            &policy,
+            InferenceTask::QuestionAnswering,
+            sensitivity,
+            std::slice::from_ref(&profile),
+        );
+        if decision.approved().is_none() {
+            let mut record = InferenceRecord::denied(
+                InferenceTask::QuestionAnswering,
+                sensitivity,
+                documents,
+                decision.reason().to_owned(),
+            );
+            if matches!(
+                decision,
+                marius_llm_policy::Decision::NoEligibleProvider { .. }
+            ) {
+                record.outcome = InferenceOutcome::NoEligibleProvider;
+            }
+            inference::record(self.db.conn(), &record)?;
+            return Ok(GroundedAnswer::refused(decision.reason().to_owned()));
+        }
+        let client = match build_client(&choice, &profile) {
+            Ok(client) => client,
+            Err(reason) => {
+                let mut record = InferenceRecord::denied(
+                    InferenceTask::QuestionAnswering,
+                    sensitivity,
+                    documents,
+                    reason.clone(),
+                );
+                record.outcome = InferenceOutcome::NoEligibleProvider;
+                inference::record(self.db.conn(), &record)?;
+                return Ok(GroundedAnswer::refused(reason));
+            }
+        };
+
+        let passages: Vec<marius_classification::qa::Passage> = relevant
+            .iter()
+            .map(|h| marius_classification::qa::Passage {
+                label: format!("{} › {}", h.document.title, h.chunk.citation_label()),
+                text: h.chunk.text.clone(),
+            })
+            .collect();
+        let request = marius_classification::qa::request(question, &passages);
+
+        let started = OffsetDateTime::now_utc();
+        let clock = std::time::Instant::now();
+        let mut record = InferenceRecord::denied(
+            InferenceTask::QuestionAnswering,
+            sensitivity,
+            documents,
+            String::new(),
+        );
+        record.provider = Some(profile.name.clone());
+        record.model = Some(choice.model.clone());
+        record.locality = Some(profile.locality);
+        record.started_at = started;
+
+        match client.chat_with(&choice.model, &request) {
+            Ok(response) => {
+                record.outcome = InferenceOutcome::Completed;
+                record.reason = format!("grounded answer via {}", profile.name);
+                record.prompt_tokens = response.prompt_tokens;
+                record.completion_tokens = response.completion_tokens;
+                record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+                inference::record(self.db.conn(), &record)?;
+
+                let cited =
+                    marius_classification::qa::cited_passages(&response.text, relevant.len());
+                let citations: Vec<marius_model::Citation> = cited
+                    .iter()
+                    .map(|&index| {
+                        let hit = relevant[index];
+                        marius_model::Citation {
+                            document: GlobalDocumentId::new(hit.document.vault, hit.document.id),
+                            chunk: Some(hit.chunk.id),
+                            label: format!(
+                                "{} › {}",
+                                hit.document.title,
+                                hit.chunk.citation_label()
+                            ),
+                            byte_range: Some((hit.chunk.byte_start, hit.chunk.byte_end)),
+                        }
+                    })
+                    .collect();
+                let unanswered = marius_classification::qa::is_unanswered(&cited);
+                Ok(GroundedAnswer {
+                    text: response.text,
+                    citations,
+                    unanswered,
+                    refusal: None,
                 })
             }
             Err(error) => {
@@ -1448,6 +1960,83 @@ impl SuggestedTags {
     }
 }
 
+/// An answer grounded in the vault's own passages (SRCH-010, AC-008).
+#[derive(Debug)]
+pub struct GroundedAnswer {
+    /// The model's prose, `[n]` citation markers left in place.
+    pub text: String,
+    /// The passages actually cited, in first-use order, clickable by byte
+    /// range (SRCH-010).
+    pub citations: Vec<marius_model::Citation>,
+    /// True when the answer cites nothing — the notes do not say
+    /// (SRCH-011), and the caller should present it that way.
+    pub unanswered: bool,
+    /// Set when policy or configuration stopped the question entirely.
+    pub refusal: Option<String>,
+}
+
+impl GroundedAnswer {
+    fn refused(reason: impl Into<String>) -> Self {
+        Self {
+            text: String::new(),
+            citations: Vec::new(),
+            unanswered: true,
+            refusal: Some(reason.into()),
+        }
+    }
+
+    fn unanswered(note: impl Into<String>) -> Self {
+        Self {
+            text: note.into(),
+            citations: Vec::new(),
+            unanswered: true,
+            refusal: None,
+        }
+    }
+}
+
+/// What one `embed_vault` run did (SRCH-007, SRCH-013).
+#[derive(Debug, Default)]
+pub struct EmbedReport {
+    /// Documents whose passages were (re)embedded this run.
+    pub documents: usize,
+    pub chunks_embedded: usize,
+    /// Documents already current in this embedding space.
+    pub up_to_date: usize,
+    /// Documents the policy engine refused to send (per-document gate).
+    pub skipped_policy: usize,
+    /// Why nothing ran at all, when nothing did.
+    pub refusal: Option<String>,
+}
+
+/// One semantically ranked result: a document, through its best passage.
+#[derive(Debug, Clone)]
+pub struct SemanticHit {
+    pub document: Document,
+    pub vault_name: String,
+    /// The passage that matched — the unit of citation (SRCH-008).
+    pub chunk: marius_model::Chunk,
+    /// Cosine similarity; 0.0 for keyword-only entries in a hybrid list.
+    pub score: f32,
+}
+
+/// Semantic or hybrid results, or the reason there are none.
+#[derive(Debug, Default)]
+pub struct SemanticResults {
+    pub hits: Vec<SemanticHit>,
+    /// Set when the policy engine or configuration refused to run.
+    pub refusal: Option<String>,
+}
+
+impl SemanticResults {
+    fn refused(reason: String) -> Self {
+        Self {
+            hits: Vec::new(),
+            refusal: Some(reason),
+        }
+    }
+}
+
 /// What `apply_external_changes` did.
 #[derive(Debug)]
 pub enum ExternalReport {
@@ -1521,4 +2110,79 @@ fn markdown_replacement(
     } else {
         destination.replace(' ', "%20")
     }
+}
+
+/// A constructed provider client. One enum rather than two trait objects,
+/// because both concrete providers implement both capabilities and the
+/// callers want whichever one the task needs.
+enum ClientKind {
+    Ollama(marius_llm::ollama::Ollama),
+    OpenAi(marius_llm::openai::OpenAiCompatible),
+}
+
+impl ClientKind {
+    fn chat_with(
+        &self,
+        model: &str,
+        request: &marius_llm::ChatRequest,
+    ) -> std::result::Result<marius_llm::ChatResponse, marius_llm::LlmError> {
+        use marius_llm::ChatProvider;
+        match self {
+            Self::Ollama(c) => c.chat(model, request),
+            Self::OpenAi(c) => c.chat(model, request),
+        }
+    }
+
+    fn embed_with(
+        &self,
+        model: &str,
+        texts: &[&str],
+    ) -> std::result::Result<Vec<Vec<f32>>, marius_llm::LlmError> {
+        use marius_llm::EmbeddingProvider;
+        match self {
+            Self::Ollama(c) => c.embed(model, texts),
+            Self::OpenAi(c) => c.embed(model, texts),
+        }
+    }
+}
+
+/// Build the client for an approved provider, or say why it cannot be
+/// built — a missing credential or base URL is "nothing eligible", not a
+/// crash (AI-004). Credentials are fetched from the environment by the
+/// name the configuration holds; the key itself is never stored (SEC-001).
+fn build_client(
+    choice: &crate::config::ModelChoice,
+    profile: &marius_llm_policy::ProviderProfile,
+) -> std::result::Result<ClientKind, String> {
+    if profile.name == "ollama" {
+        return Ok(ClientKind::Ollama(marius_llm::ollama::Ollama::new(
+            choice
+                .base_url
+                .clone()
+                .unwrap_or_else(|| marius_llm::ollama::DEFAULT_BASE_URL.to_owned()),
+        )));
+    }
+    let key = match &choice.credential {
+        Some(name) => match std::env::var(name) {
+            Ok(key) => Some(key),
+            Err(_) => {
+                return Err(format!("credential {name:?} is not set in the environment"));
+            }
+        },
+        None => None,
+    };
+    let base = choice.base_url.clone().ok_or_else(|| {
+        format!(
+            "provider {:?} needs a base_url in the configuration",
+            profile.name
+        )
+    })?;
+    Ok(ClientKind::OpenAi(
+        marius_llm::openai::OpenAiCompatible::new(
+            profile.name.clone(),
+            base,
+            profile.locality,
+            key,
+        ),
+    ))
 }

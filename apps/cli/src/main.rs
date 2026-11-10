@@ -82,6 +82,29 @@ enum Command {
         limit: usize,
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// `keyword` (default), `semantic`, or `hybrid` (SRCH-009).
+        /// Semantic and hybrid need `marius embed` to have run and search
+        /// one vault (name it unless exactly one is open).
+        #[arg(long, default_value = "keyword")]
+        mode: String,
+        /// Vault for semantic/hybrid modes.
+        #[arg(long)]
+        vault: Option<String>,
+    },
+
+    /// Chunk and embed a vault's notes for semantic search (SRCH-007).
+    Embed {
+        /// Vault name. Omit when exactly one vault is open.
+        vault: Option<String>,
+    },
+
+    /// Ask a question, answered only from your notes, with citations
+    /// (SRCH-010, AC-008).
+    Ask {
+        question: Vec<String>,
+        /// Vault to ask. Omit when exactly one vault is open.
+        #[arg(long)]
+        vault: Option<String>,
     },
 
     /// Explain the query language.
@@ -306,8 +329,22 @@ fn run(cli: &Cli) -> Result<()> {
             query,
             limit,
             offset,
+            mode,
+            vault,
         } => {
             let query = query.join(" ");
+            if mode != "keyword" {
+                let vault = one_vault(&app, vault.as_deref())?;
+                let results = match mode.as_str() {
+                    "semantic" => app.semantic_search(&query, vault.id, *limit)?,
+                    "hybrid" => app.hybrid_search(&query, vault.id, *limit)?,
+                    other => anyhow::bail!(
+                        "unknown mode {other:?}; expected keyword, semantic or hybrid"
+                    ),
+                };
+                render::semantic_results(&query, &results, cli.json);
+                return Ok(());
+            }
             let results = app.search(
                 &query,
                 SearchOptions {
@@ -349,6 +386,46 @@ fn run(cli: &Cli) -> Result<()> {
             Ok(())
         }
         Command::Model(command) => model_command(&mut app, command, cli.json),
+        Command::Embed { vault } => {
+            let vault = one_vault(&app, vault.as_deref())?;
+            let report = app.embed_vault(&vault)?;
+            if let Some(refusal) = &report.refusal {
+                println!("nothing embedded: {refusal}");
+                return Ok(());
+            }
+            println!(
+                "{}: {} passage(s) embedded across {} document(s); {} already current{}",
+                vault.name,
+                report.chunks_embedded,
+                report.documents,
+                report.up_to_date,
+                if report.skipped_policy > 0 {
+                    format!("; {} skipped by policy", report.skipped_policy)
+                } else {
+                    String::new()
+                }
+            );
+            Ok(())
+        }
+        Command::Ask { question, vault } => {
+            let vault = one_vault(&app, vault.as_deref())?;
+            let question = question.join(" ");
+            let answer = app.ask(&question, vault.id)?;
+            if let Some(refusal) = &answer.refusal {
+                println!("not asked: {refusal}");
+                return Ok(());
+            }
+            println!("{}", answer.text.trim());
+            if !answer.citations.is_empty() {
+                println!();
+                for (index, citation) in answer.citations.iter().enumerate() {
+                    println!("  [{}] {}", index + 1, citation.label);
+                }
+            } else if answer.unanswered {
+                println!("\n(the notes do not answer this)");
+            }
+            Ok(())
+        }
         Command::HelpQuery => {
             print!("{}", render::QUERY_HELP);
             Ok(())
@@ -655,6 +732,20 @@ fn tag_command(app: &mut Marius, command: &TagCommand, json: bool) -> Result<()>
             let assignments = app.document_tags(found.id)?;
             render::document_tags(&assignments, json);
             Ok(())
+        }
+    }
+}
+
+fn one_vault(app: &Marius, name: Option<&str>) -> Result<marius_model::Vault> {
+    match name {
+        Some(name) => Ok(app.vault(name)?),
+        None => {
+            let mut vaults = app.vaults()?;
+            match vaults.len() {
+                0 => anyhow::bail!("no vaults registered"),
+                1 => Ok(vaults.remove(0)),
+                _ => anyhow::bail!("several vaults are open; say which with --vault"),
+            }
         }
     }
 }

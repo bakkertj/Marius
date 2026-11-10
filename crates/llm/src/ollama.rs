@@ -144,3 +144,42 @@ pub(crate) fn check<T: serde::de::DeserializeOwned>(
         detail: format!("{e} in {}", body.chars().take(200).collect::<String>()),
     })
 }
+
+impl crate::EmbeddingProvider for Ollama {
+    fn name(&self) -> &str {
+        "ollama"
+    }
+
+    fn locality(&self) -> Locality {
+        Locality::Local
+    }
+
+    fn embed(&self, model: &str, texts: &[&str]) -> Result<Vec<Vec<f32>>, LlmError> {
+        let endpoint = format!("{}/api/embed", self.base_url);
+        #[derive(Deserialize)]
+        struct Reply {
+            embeddings: Vec<Vec<f32>>,
+        }
+        let response = self
+            .client
+            .post(&endpoint)
+            .json(&json!({ "model": model, "input": texts }))
+            .send()
+            .map_err(|source| LlmError::Unreachable {
+                endpoint: endpoint.clone(),
+                source,
+            })?;
+        let reply: Reply = check(&endpoint, response)?;
+        if reply.embeddings.len() != texts.len() {
+            return Err(LlmError::Protocol {
+                endpoint,
+                detail: format!(
+                    "{} inputs produced {} vectors",
+                    texts.len(),
+                    reply.embeddings.len()
+                ),
+            });
+        }
+        Ok(reply.embeddings)
+    }
+}

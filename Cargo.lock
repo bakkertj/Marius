@@ -826,6 +826,7 @@ name = "marius-core"
 version = "0.1.0"
 dependencies = [
  "marius-classification",
+ "marius-embeddings",
  "marius-indexing",
  "marius-llm",
  "marius-llm-policy",
@@ -845,6 +846,11 @@ dependencies = [
 [[package]]
 name = "marius-embeddings"
 version = "0.1.0"
+dependencies = [
+ "marius-model",
+ "pretty_assertions",
+ "time",
+]
 
 [[package]]
 name = "marius-graph"

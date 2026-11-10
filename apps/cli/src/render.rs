@@ -9,7 +9,7 @@
 //! than a long one.
 
 use anyhow::Result;
-use marius_core::{Marius, Neighbourhood, RenameReport, SearchResults};
+use marius_core::{Marius, Neighbourhood, RenameReport, SearchResults, SemanticResults};
 use marius_indexing::indexer::IndexReport;
 use marius_model::{
     Document, DocumentTag, Provenance, Relationship, ReviewState, Tag, Vault, VaultPolicy,
@@ -166,6 +166,56 @@ pub fn index_reports(reports: &[IndexReport], json: bool) {
         // reports, and a count alone is not one.
         for (path, problem) in &report.problems {
             println!("  ! {path}: {problem}");
+        }
+    }
+}
+
+/// Semantic or hybrid results (SRCH-007, SRCH-009).
+pub fn semantic_results(query: &str, results: &SemanticResults, json: bool) {
+    if json {
+        let rows: Vec<_> = results
+            .hits
+            .iter()
+            .map(|hit| {
+                serde_json::json!({
+                    "vault": hit.vault_name,
+                    "path": hit.document.path.to_string(),
+                    "id": hit.document.id.to_string(),
+                    "title": hit.document.title,
+                    "score": hit.score,
+                    "passage": hit.chunk.text,
+                    "heading": hit.chunk.citation_label(),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "query": query,
+                "refusal": results.refusal,
+                "hits": rows,
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    if let Some(refusal) = &results.refusal {
+        println!("not run: {refusal}");
+        return;
+    }
+    if results.hits.is_empty() {
+        println!("no matches");
+        return;
+    }
+    for hit in &results.hits {
+        println!("{}", hit.document.title);
+        println!("  {}:{}", hit.vault_name, hit.document.path);
+        let passage: String = hit.chunk.text.chars().take(160).collect();
+        let passage = passage.replace('\n', " ");
+        if hit.score > 0.0 {
+            println!("  {:.2}  {}", hit.score, passage.trim());
+        } else {
+            println!("  {}", passage.trim());
         }
     }
 }

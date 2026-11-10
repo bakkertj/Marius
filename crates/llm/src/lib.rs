@@ -79,3 +79,14 @@ pub(crate) fn http_client(timeout: Duration) -> reqwest::blocking::Client {
         .build()
         .expect("constructing an HTTP client cannot fail with these options")
 }
+
+/// A provider that can turn texts into vectors (SRCH-007).
+///
+/// Batched: one call embeds many passages, which is the shape both the
+/// Ollama and OpenAI APIs actually offer and the only shape that is not
+/// painfully slow over HTTP.
+pub trait EmbeddingProvider {
+    fn name(&self) -> &str;
+    fn locality(&self) -> Locality;
+    fn embed(&self, model: &str, texts: &[&str]) -> Result<Vec<Vec<f32>>, LlmError>;
+}

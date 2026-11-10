@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **111 done, 20 partial, 26 ready, 37 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **118 done, 21 partial, 21 ready, 34 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -119,7 +119,7 @@ Totals of 194 requirement IDs: **111 done, 20 partial, 26 ready, 37 open**. Ever
 |---|---|---|---|
 | AI-001 | done | `llm::openai::OpenAiCompatible`, `ModelChoice` | One adapter for OpenRouter, self-hosted and any `/v1/chat/completions`; locality declared, key by env name. |
 | AI-002 | done | `llm::ollama::Ollama` | Chat, model listing, liveness; socket-level tests; verified against a live daemon. |
-| AI-003 | ready | `config::ModelSettings`, `InferenceTask` | Per-task model selection modelled. |
+| AI-003 | done | `ModelSettings`, `marius model set` | Independent model per task, exercised by tagging, embedding and Q&A. |
 | AI-004 | done | everything above | `ac_017_everything_essential_works_with_no_network` |
 | AI-005 | done | `llm-policy::locality_permitted` | `the_locality_table_is_exactly_as_documented` |
 | AI-006 | done | `ProviderProfile::trusted_for_personal`, `--trusted` | `personal_content_needs_trust_to_go_remote` |
@@ -146,12 +146,12 @@ Totals of 194 requirement IDs: **111 done, 20 partial, 26 ready, 37 open**. Ever
 | SRCH-004 | done | `core::search::vault_scope` | `ac_009_cross_vault_links_and_global_search` |
 | SRCH-005 | done | `SearchHit::{vault_name,reference}` | `srch_003_and_005_query_features_and_result_identity` |
 | SRCH-006 | partial | `prefix='2 3 4'`, `saved_search` table | Prefix search done; fuzzy and saved searches not built. |
-| SRCH-007 | ready | `chunks`, `EmbeddingModel` | Storage and staleness done; no embedding client. |
+| SRCH-007 | done | `EmbeddingProvider`, `Marius::embed_vault`, `marius embed` | `embedding_is_idempotent_and_staleness_follows_the_content_hash` |
 | SRCH-008 | done | `markdown::chunk`, `storage::chunks` | `chunks_are_produced_only_when_asked_for` |
-| SRCH-009 | ready | `matching_seqs`, `cosine_similarity` | Pieces present; fusion not wired. |
-| SRCH-010 | ready | `Citation`, `Chunk::citation_label` | Chunk spans quote the file exactly. |
-| SRCH-011 | open | — | Needs the Q&A pipeline. |
-| SRCH-012 | ready | `ClaimSupport`, `Claim::is_well_formed` | Rule implemented and tested. |
+| SRCH-009 | done | `embeddings::fuse_reciprocal_rank`, `hybrid_search`, `--mode` | `semantic_search_ranks_by_meaning_and_hybrid_fuses` |
+| SRCH-010 | done | `Marius::ask`, `qa::cited_passages`, `marius ask` | `a_grounded_answer_cites_real_passages_by_byte_range` |
+| SRCH-011 | done | similarity floor in `ask`, `GroundedAnswer::unanswered` | `an_off_topic_question_is_answered_with_honesty_not_improvisation` |
+| SRCH-012 | partial | `qa` prompt ('this suggests'), invented citations dropped | Prompted and parsed; per-claim `ClaimSupport` classification not yet surfaced. |
 | SRCH-013 | done | `search_index::index`, `chunks::stale_chunks` | `the_search_index_is_updated_when_a_file_changes` |
 | SRCH-014 | open | — | P2. |
 
@@ -268,8 +268,8 @@ Totals of 194 requirement IDs: **111 done, 20 partial, 26 ready, 37 open**. Ever
 | AC-004 | done | `ac_004_manual_tag_changes_are_reflected_immediately` |
 | AC-005 | partial | `ac_005_ai_tags_carry_provenance_and_never_touch_the_file` — the guarantee is tested; auto-tagging itself is not built |
 | AC-006 | done | `ac_006_a_rejection_persists_across_reindexing` |
-| AC-007 | open | Needs embeddings. |
-| AC-008 | open | Needs grounded Q&A. |
+| AC-007 | done | `semantic_search_ranks_by_meaning_and_hybrid_fuses` (conceptual match without the keyword). |
+| AC-008 | done | `a_grounded_answer_cites_real_passages_by_byte_range`; refusal honesty in the off-topic test. |
 | AC-009 | done | `ac_009_cross_vault_links_and_global_search` |
 | AC-010 | ready | `a_user_edited_note_is_never_regenerated_in_place` (rule tested; no generator) |
 | AC-011 | done | `ac_011_a_pasted_email_becomes_ordinary_knowledge` |
