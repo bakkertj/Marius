@@ -19,9 +19,9 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use gpui::{
-    div, img, prelude::*, px, Context, ElementId, EventEmitter, FontStyle, FontWeight,
-    HighlightStyle, InteractiveText, SharedString, StrikethroughStyle, StyledText, UnderlineStyle,
-    Window,
+    div, img, point, prelude::*, px, Context, ElementId, EventEmitter, FontStyle, FontWeight,
+    HighlightStyle, InteractiveText, ScrollHandle, SharedString, StrikethroughStyle, StyledText,
+    UnderlineStyle, Window,
 };
 use marius_markdown::rewrite::{apply, Edit};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
@@ -585,6 +585,9 @@ pub struct Preview {
     context: Box<dyn PreviewContext>,
     /// Font scale (⌃⇧+/−), 1.0 = the design sizes.
     zoom: f32,
+    /// The reading pane's scroll position, held so the keyboard can
+    /// drive it (the wheel goes through gpui's own handling).
+    scroll: ScrollHandle,
 }
 
 impl EventEmitter<PreviewEvent> for Preview {}
@@ -596,7 +599,33 @@ impl Preview {
             blocks: Vec::new(),
             context,
             zoom: 1.0,
+            scroll: ScrollHandle::new(),
         }
+    }
+
+    /// Jump back to the top — a different document must not inherit the
+    /// last one's scroll position.
+    pub fn scroll_to_top(&mut self, cx: &mut Context<Self>) {
+        self.scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    }
+
+    /// Scroll by a fraction of the viewport: +1.0 is a page down,
+    /// -0.5 half a page up. Offsets grow negative as content moves up.
+    pub fn scroll_pages(&mut self, pages: f32, cx: &mut Context<Self>) {
+        let viewport = self.scroll.bounds().size.height;
+        let mut offset = self.scroll.offset();
+        offset.y -= viewport * pages;
+        self.scroll.set_offset(offset);
+        cx.notify();
+    }
+
+    /// Straight to the end of the document.
+    pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
+        let mut offset = self.scroll.offset();
+        offset.y = -self.scroll.max_offset().height;
+        self.scroll.set_offset(offset);
+        cx.notify();
     }
 
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
@@ -1010,6 +1039,7 @@ impl Render for Preview {
             .id("preview-scroll")
             .size_full()
             .overflow_y_scroll()
+            .track_scroll(&self.scroll)
             .bg(theme.background)
             .text_color(theme.text)
             .text_size(px(15.0 * self.zoom))

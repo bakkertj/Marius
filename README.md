@@ -101,6 +101,7 @@ the window to import them.
 | ⌘S | Ctrl+S | Save (switching documents autosaves) |
 | F2 | F2 | Rename or move the open note — edit the path, links are rewritten |
 | ⌘E | Ctrl+E | Reading mode (wiki links and attachments clickable) |
+| PgDn / PgUp, Space / ⇧Space, ↑↓, Home / End | same | Scroll the reading view (mouse wheel works too) |
 | ⌘⇧E | Ctrl+Shift+E | Live side-by-side split |
 | ⌘G | Ctrl+G | Knowledge graph |
 | ⌘B | Ctrl+B | Backlinks / related panel |

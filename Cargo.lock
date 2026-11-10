@@ -1669,6 +1669,7 @@ dependencies = [
  "htmd",
  "mail-parser",
  "marius-model",
+ "markup5ever_rcdom",
  "pdf-extract",
  "pretty_assertions",
  "quick-xml",

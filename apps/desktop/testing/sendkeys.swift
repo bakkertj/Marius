@@ -72,6 +72,7 @@ func typeText(_ text: String) {
 let special: [String: CGKeyCode] = [
     "return": 36, "tab": 48, "space": 49, "delete": 51, "escape": 53,
     "left": 123, "right": 124, "down": 125, "up": 126,
+    "pageup": 116, "pagedown": 121, "home": 115, "end": 119, "f2": 120,
 ]
 
 /// Named key, else any single ASCII character via the QWERTY table. A name
@@ -161,6 +162,21 @@ while i < args.count {
             ev.post(tap: .cghidEventTap)
             usleep(UInt32(delay))
         }
+    case "--scroll":
+        // --scroll <x> <y> <dy>: move the mouse there, then wheel-scroll
+        // (negative dy scrolls content down).
+        let sx = Double(args[i+1])!, sy = Double(args[i+2])!, dy = Int32(args[i+3])!
+        i += 3
+        let spt = CGPoint(x: sx, y: sy)
+        let move = CGEvent(mouseEventSource: src, mouseType: .mouseMoved,
+                           mouseCursorPosition: spt, mouseButton: .left)!
+        move.post(tap: .cghidEventTap)
+        usleep(80_000)
+        if let ev = CGEvent(scrollWheelEvent2Source: src, units: .pixel,
+                            wheelCount: 1, wheel1: dy, wheel2: 0, wheel3: 0) {
+            ev.post(tap: .cghidEventTap)
+        }
+        usleep(120_000)
     case "--sleep":
         i += 1
         usleep(UInt32((Double(args[i]) ?? 0.2) * 1_000_000))

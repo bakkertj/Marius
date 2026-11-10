@@ -18,6 +18,7 @@ pub mod email;
 pub mod html;
 pub mod msg;
 pub mod smime;
+pub(crate) mod tables;
 
 /// One note ready to be written into a vault.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +55,7 @@ pub enum ImportError {
 pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
     htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["style", "script", "noscript", "head", "nav", "iframe"])
+        .add_handler(vec!["table"], tables::table_handler)
         .build()
         .convert(html)
 }
