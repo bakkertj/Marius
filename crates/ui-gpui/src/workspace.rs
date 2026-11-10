@@ -323,7 +323,12 @@ pub struct Workspace {
     /// The open document's tags with real provenance and review state,
     /// for the properties strip and its approve/reject loop (UI-002,
     /// UI-010, TAG-007). One query per open, not per frame.
-    open_tags: Vec<(SharedString, Provenance, marius_model::ReviewState)>,
+    open_tags: Vec<(
+        SharedString,
+        Provenance,
+        marius_model::ReviewState,
+        marius_model::TagSource,
+    )>,
     /// Provenance banner for a generated note (AI-011): who made it,
     /// from what, and whether a person has edited it since.
     open_provenance: Option<marius_model::GeneratedNoteProvenance>,
@@ -684,6 +689,7 @@ impl Workspace {
                     tag.canonical_name.to_string().into(),
                     assignment.provenance,
                     assignment.review,
+                    assignment.source,
                 ));
             }
         }
@@ -2264,7 +2270,7 @@ impl Workspace {
             .flex_wrap()
             .items_center()
             .gap(px(4.));
-        for (index, (tag, provenance, review)) in self.open_tags.iter().enumerate() {
+        for (index, (tag, provenance, review, source)) in self.open_tags.iter().enumerate() {
             let marker = match provenance {
                 Provenance::AiGenerated => "~",
                 Provenance::AiConfirmed => "+",
@@ -2288,6 +2294,12 @@ impl Workspace {
             // durable against reclassification.
             let reviewable = *provenance == Provenance::AiGenerated
                 && *review == marius_model::ReviewState::Unreviewed;
+            // A tag held only in the database (an accepted AI tag, or one
+            // added by hand through the CLI) can be taken back: minds
+            // change (TAG-012). An inline or frontmatter tag lives in the
+            // note's own text — delete it there, or reindexing would just
+            // restore it.
+            let removable = !reviewable && *source == marius_model::TagSource::Index;
             if reviewable {
                 let accept: SharedString = tag.clone();
                 let reject: SharedString = tag.clone();
@@ -2316,6 +2328,21 @@ impl Workspace {
                                 this.review_tag(&reject, false, cx);
                             })),
                     );
+            }
+            if removable {
+                let reject: SharedString = tag.clone();
+                chip = chip.child(
+                    div()
+                        .id(("tagdrop", index))
+                        .pl(px(5.))
+                        .text_color(theme.muted)
+                        .hover(|d| d.text_color(theme.text))
+                        .cursor_pointer()
+                        .child("✗")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.review_tag(&reject, false, cx);
+                        })),
+                );
             }
             chips = chips.child(chip);
         }
