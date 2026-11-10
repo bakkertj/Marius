@@ -17,6 +17,7 @@ marius-markdown = { path = "../markdown" }
 marius-storage = { path = "../storage" }
 marius-indexing = { path = "../indexing" }
 marius-search = { path = "../search" }
+marius-llm = { path = "../llm" }
 anyhow = "1"
 unicode-segmentation = "1"
 pulldown-cmark = { version = "0.12", default-features = false }

@@ -26,6 +26,7 @@ use crate::editor::{Editor, EditorEvent};
 use crate::graph_view::{GraphEvent, GraphView};
 use crate::highlight::LinkResolver;
 use crate::preview::{Preview, PreviewContext, PreviewEvent};
+use crate::settings::SettingsView;
 use crate::theme::{Appearance, Theme};
 use crate::tree::{self, TreeRow};
 
@@ -49,7 +50,8 @@ actions!(
         NewTab,
         CloseTab,
         NextTab,
-        PreviousTab
+        PreviousTab,
+        OpenSettings
     ]
 );
 
@@ -88,6 +90,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-shift-p")), OpenPalette, None),
         // Backlinks and related notes for the open document (UI-005).
         KeyBinding::new(key(format!("{primary}-b")), ToggleBacklinks, None),
+        // Settings (⌘, — the platform convention).
+        KeyBinding::new(key(format!("{primary}-,")), OpenSettings, None),
         // Tabs (UI-006).
         KeyBinding::new(key(format!("{primary}-shift-t")), NewTab, None),
         KeyBinding::new(key(format!("{primary}-w")), CloseTab, None),
@@ -130,6 +134,7 @@ enum PaletteAction {
     ZoomOut,
     ZoomReset,
     ToggleAppearance,
+    OpenSettings,
     Save,
     /// A command an enabled plugin registered (PLUG-010), run on a
     /// worker thread with its own connection.
@@ -272,6 +277,8 @@ enum ViewMode {
     /// Editor and rendered preview side by side, the preview following
     /// every keystroke (MD-003's third mode).
     Split,
+    /// Model configuration and vault policy (AI-016, SEC-005).
+    Settings,
     /// The knowledge graph (GRAPH-001), local or global (GRAPH-005).
     Graph,
 }
@@ -292,6 +299,7 @@ pub struct Workspace {
     preview: Entity<Preview>,
     preview_base: Rc<VaultPreviewContext>,
     graph: Entity<GraphView>,
+    settings: Entity<SettingsView>,
     mode: ViewMode,
 
     rows: Vec<Row>,
@@ -373,6 +381,7 @@ impl Workspace {
         cx.subscribe_in(&preview, window, Self::on_preview_event)
             .detach();
         let graph = cx.new(|_| GraphView::new(app.clone(), vault.id, theme));
+        let settings = cx.new(|cx| SettingsView::new(app.clone(), vault.id, theme, cx));
         cx.subscribe_in(&graph, window, Self::on_graph_event)
             .detach();
 
@@ -423,6 +432,7 @@ impl Workspace {
             preview,
             preview_base,
             graph,
+            settings,
             mode: ViewMode::Edit,
             rows: Vec::new(),
             tree: Vec::new(),
@@ -1135,7 +1145,7 @@ impl Workspace {
                     .update(cx, |preview, cx| preview.set_source(&text, cx));
                 ViewMode::Reading
             }
-            ViewMode::Reading | ViewMode::Split | ViewMode::Graph => {
+            ViewMode::Reading | ViewMode::Split | ViewMode::Graph | ViewMode::Settings => {
                 let handle = self.editor.read(cx).focus_handle(cx);
                 window.focus(&handle);
                 ViewMode::Edit
@@ -1260,6 +1270,7 @@ impl Workspace {
             ("Zoom out", PaletteAction::ZoomOut),
             ("Zoom: reset", PaletteAction::ZoomReset),
             ("Toggle light/dark", PaletteAction::ToggleAppearance),
+            ("Open settings", PaletteAction::OpenSettings),
         ]
         .into_iter()
         .map(|(label, action)| PaletteItem {
@@ -1400,6 +1411,10 @@ impl Workspace {
             PaletteAction::ZoomReset => self.set_zoom(1.0, cx),
             PaletteAction::ToggleAppearance => {
                 self.on_toggle_appearance(&ToggleAppearance, window, cx)
+            }
+            PaletteAction::OpenSettings => {
+                self.mode = ViewMode::Settings;
+                cx.notify();
             }
             PaletteAction::Plugin { plugin, command } => {
                 // A plugin command may block on anything: its own thread,
@@ -1706,6 +1721,8 @@ impl Workspace {
         self.preview
             .update(cx, |preview, cx| preview.set_theme(theme, cx));
         self.graph.update(cx, |graph, _| graph.set_theme(theme));
+        self.settings
+            .update(cx, |settings, cx| settings.set_theme(theme, cx));
         cx.notify();
     }
 
@@ -2450,7 +2467,7 @@ impl Workspace {
                         self.status,
                         match self.mode {
                             ViewMode::Edit => "read",
-                            ViewMode::Reading | ViewMode::Split | ViewMode::Graph => "edit",
+                            ViewMode::Reading | ViewMode::Split | ViewMode::Graph | ViewMode::Settings => "edit",
                         },
                         self.theme.appearance.toggled().label(),
                     ))),
@@ -2491,6 +2508,17 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleBacklinks, _w, cx| {
                 this.backlinks_open = !this.backlinks_open;
                 this.refresh_neighbourhood();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+                this.mode = match this.mode {
+                    ViewMode::Settings => {
+                        let handle = this.editor.read(cx).focus_handle(cx);
+                        window.focus(&handle);
+                        ViewMode::Edit
+                    }
+                    _ => ViewMode::Settings,
+                };
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
@@ -2569,6 +2597,9 @@ impl Render for Workspace {
                                             )
                                             .into_any_element(),
                                         ViewMode::Graph => self.graph.clone().into_any_element(),
+                                        ViewMode::Settings => {
+                                            self.settings.clone().into_any_element()
+                                        }
                                     }),
                             ),
                     )

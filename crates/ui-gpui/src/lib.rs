@@ -5,6 +5,7 @@ pub mod graph_view;
 pub mod highlight;
 pub mod palette;
 pub mod preview;
+pub mod settings;
 pub mod theme;
 pub mod tree;
 pub mod workspace;

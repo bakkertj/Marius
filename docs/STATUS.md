@@ -75,6 +75,13 @@ every platform, since the file is created on the Mac. Three behaviours:
   drawable (GRAPH-014). Assembly (`core::graph`) and the deterministic
   force simulation (`ui-gpui/graph.rs`) are headlessly tested; the canvas
   is the thin part.
+- **Settings in the app (⌘,)**: per-task model configuration —
+  provider, model, base URL, credential *name* (never the key,
+  SEC-001), trusted-with-personal toggle — with a connection test that
+  lists a local Ollama's models and says whether the chosen one is
+  pulled; plus the vault's privacy floor and the auto-classify switch.
+  Writes the same Config and VaultPolicy the CLI reads, so
+  `marius model show` and the pane can never disagree.
 - **Search conveniences and migration**: fuzzy title matching
   (`marius search --fuzzy`, shared matcher with the palette), saved
   searches validated at save time (`--save`/`--saved`,

@@ -3795,6 +3795,7 @@ dependencies = [
  "gpui",
  "marius-core",
  "marius-indexing",
+ "marius-llm",
  "marius-markdown",
  "marius-model",
  "marius-search",

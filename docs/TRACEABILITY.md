@@ -132,7 +132,7 @@ Totals of 194 requirement IDs: **154 done, 15 partial, 4 ready, 21 open**. Every
 | AI-013 | done | save-hook flips `user_edited`; regenerate consults it | `regeneration_replaces_in_place_until_a_person_edits_then_writes_a_sibling` |
 | AI-014 | done | `Marius::promote_note`, `marius note promote` | `a_promoted_note_is_protected_like_a_source_document` |
 | AI-015 | done | `storage::inference`, `marius audit` | Every request audited, refusals included; tokens and duration recorded. |
-| AI-016 | partial | `VaultPolicy`, `config` | Per-vault rules and prompt IDs modelled. |
+| AI-016 | partial | `VaultPolicy`, settings view (⌘,), prompt ids | Per-vault rules editable in the UI and CLI; configurable prompt templates and provider fallback chains remain. |
 | AI-017 | done | `VaultPath` traversal refusal, `Capability` | `paths_refuse_to_escape_the_vault` |
 | AI-018 | open | — | P2. |
 
