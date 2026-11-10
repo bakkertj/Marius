@@ -4,15 +4,15 @@ What works today, what is designed but not built, and what is next. Precise
 per-requirement status is in [TRACEABILITY.md](TRACEABILITY.md), which is
 checked against the specification on every `cargo test`.
 
-**As of this writing: 713 tests (633 core + 80 UI), zero clippy warnings, formatted.**
+**As of this writing: 730 tests (644 core + 86 UI), zero clippy warnings, formatted.**
 
 ## Platform position
 
 | Platform | Core + CLI | Desktop UI |
 |---|---|---|
 | macOS | **verified in CI** (developed here) | works, interactively verified |
-| Windows | **verified in CI** — build + full test suite pass on `windows-latest` | untested (gpui Windows support is young) |
-| Linux | **verified in CI** (`ubuntu-latest`) | untested |
+| Windows | **verified in CI** — build + full test suite pass on `windows-latest` | **works, verified in real use** (creating, renaming, importing, AI tagging against a work gateway) |
+| Linux | **verified in CI** (`ubuntu-latest`) | builds in CI; untested interactively |
 
 The core is pure Rust with SQLite built from its bundled amalgamation, so there
 is no platform-specific code and no system dependency to install. Path handling
@@ -22,10 +22,11 @@ directory `fsync` after an atomic rename is skipped on Windows, where opening a
 directory as a file is not permitted, and that is non-fatal by construction.
 
 `.github/workflows/ci.yml` builds, tests and smoke-tests the CLI on
-`windows-latest`, `macos-latest` and `ubuntu-latest`. The first push ran it:
-the build and the full test suite pass on all three. What remains unproven is
-the GPUI desktop app on Windows and Linux (it builds in a separate workspace
-that CI does not cover) and real day-to-day use of a vault on NTFS.
+`windows-latest`, `macos-latest` and `ubuntu-latest` on every push. The
+desktop app is used daily on Windows against a real work vault — including
+`.htm`/`.msg` email import and AI tagging through a corporate
+OpenAI-compatible gateway (OS trust roots and the Windows system proxy are
+honoured). Linux remains the untested desktop platform.
 
 ### Filenames that do not travel
 
@@ -41,7 +42,11 @@ every platform, since the file is created on the Mac. Three behaviours:
 - **`marius doctor` reports** every file in the vault that will not open on
   Windows, with a paste-able `marius rename` command to fix it.
 
-## The desktop application (macOS, verified; Windows/Linux untested)
+## The desktop application (macOS and Windows, verified in use)
+
+The full keyboard shortcut table and the inline note syntax (tags,
+frontmatter, wiki links, callouts, math, templates) are documented in the
+[README](../README.md).
 
 `apps/desktop` + `crates/ui-gpui` — a GPUI three-pane application:
 
@@ -249,39 +254,24 @@ line.
   registerCommand. The Obsidian-compatibility shim over this runtime is
   the part that remains.
 
-## Designed and stored for, but not built
+## Not built
 
-The contracts and database tables exist; the behaviour does not. Nothing here
-requires revisiting the four invariants.
+Everything above is live; this is what is not.
 
-- **AI behaviours beyond tagging.** The policy engine (`marius-llm-policy`),
-  the Ollama and OpenAI-compatible adapters, the audit log and automatic
-  tag suggestion are **built and live** — see "Works today". Embeddings,
-  semantic search, summarisation, grounded Q&A and relationship discovery
-  still await their components; the policy engine and audit log they must
-  pass through are already in place.
-- **Generated notes and grounded Q&A.** `GeneratedNoteProvenance`, `Citation`,
-  `Claim` and `ClaimSupport` exist, including the rule that a user-edited note
-  is never regenerated in place. No generator.
-- **Synchronisation.** The change journal, logical clock, tombstones, conflict
-  detection and per-vault backend records are live and tested. No transport,
-  no CloudKit, no server.
-- **Plugins.** Manifest reading, capability grants and compatibility
-  diagnostics are modelled. No JavaScript runtime.
-
-## Not started
-
-- **GPUI desktop UI** (UI-001 … UI-006, UI-009, MD-001, MD-003, GRAPH-001).
-  `crates/ui-gpui` and `apps/desktop` are excluded from the workspace because
-  GPUI is a fast-moving git dependency; the CLI exercises every service a UI
-  would call.
-- **iOS** (ARCH-003, UI-007) — phase 7.
-- **Importers** for PDF, HTML, Word, `.eml`, Outlook `.msg` and `.mbox` (IM-008, IM-009,
-  IM-011). Markdown, plain text and pasted email already work by opening in
-  place.
-- **Filesystem watching** (IM-010) — `indexer::index_path` is the entry point a
-  watcher would call.
-- **Self-hosted sync service** (`apps/sync-server`).
+- **iOS** (ARCH-003, UI-007) — phase 7. CloudKit sync with it; the
+  self-hosted sync service is the transport that exists.
+- **OCR** — a scanned PDF (no text layer) is refused with an honest message,
+  never imported as an empty note.
+- **A math typesetter** — `$…$` is recognised and displayed distinctly, not
+  rendered.
+- **The Obsidian plugin-compatibility shim** — the Boa runtime, capability
+  grants and the `marius.*` API are live; the Obsidian-shaped wrapper over
+  them is not.
+- **Editor conveniences** — line numbers; Home/End follow logical lines under
+  soft wrap; single window.
+- **Tag consolidation suggestions** (TAG-016) and a vault-wide
+  `tag delete` command — per-note remove/reject exist everywhere, including
+  ✗ on accepted chips.
 
 ## Honest gaps in what is marked done
 
@@ -335,19 +325,10 @@ Three problems that only appeared once there was a realistic amount of data:
 
 In the order that keeps each step useful on its own:
 
-1. **GPUI on Windows.** Step 1 of the spike is done on macOS and passed — see
-   [SPIKE-GPUI.md](SPIKE-GPUI.md). Windows is now the blocking question and
-   needs a Windows machine; the CI workflow covers the core and CLI there, not
-   the UI.
-2. **The editor spike.** The largest remaining risk: GPUI gives you layout and
-   input, not a text editor.
-3. **Filesystem watching** — small, and turns the CLI into something that keeps
-   itself current.
-4. **Ollama adapter plus the policy engine** — together, because the engine is
-   what makes the adapter safe to have. The audit log should be written from the
-   first request, including refusals.
-5. **Automatic tagging** on top of those two. Every protection it needs is
-   already built and tested, so this is mostly prompt and review-queue work.
-6. **Embeddings and hybrid search**, then grounded Q&A with citations.
-7. **Sync**, starting with the self-hosted service, since it is testable without
-   Apple infrastructure.
+1. **Linux desktop verification** — the app builds; nobody has used it there.
+2. **Vault-wide tag management** — `marius tag delete <name>`, and surfacing
+   rename/merge (storage supports both) in the CLI and palette.
+3. **Parallel first index** — single-threaded today; the obvious `rayon` win.
+4. **OCR for scanned PDFs**, now that attachments are content-searchable.
+5. **The Obsidian plugin shim**, once a second real plugin exists to keep it
+   honest.

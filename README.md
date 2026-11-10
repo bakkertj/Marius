@@ -8,13 +8,15 @@ Named for **Marius Michel Pasha** (1819–1907), a French sailor who was
 shipwrecked off the Ottoman coast and spent the rest of his life putting
 lighthouses where ships kept being lost — more than a hundred of them.
 
-> **Status: offline core + desktop app.** The core is built and tested —
-> vaults, Markdown, durable file handling, SQLite indexing, search, tags with
-> provenance, the link graph — and a native GPUI desktop app now sits on it:
-> live search, a real Markdown editor with highlighting and word-grouped undo,
-> tag browser, provenance chips, dark/light. Verified interactively on macOS.
-> AI, sync and plugins are designed for but not yet implemented. See
-> [docs/STATUS.md](docs/STATUS.md).
+> **Status: the full system is built and in daily use.** Core, CLI and a
+> native GPUI desktop app (macOS and Windows, both verified in use): editor,
+> reading mode and live split, knowledge graph, tabs, command palette,
+> settings. AI tagging, semantic/hybrid search and grounded Q&A run behind a
+> privacy policy engine with a full audit log — local Ollama or any
+> OpenAI-compatible endpoint. Importers (HTML, PDF, Word, EPUB, `.eml`,
+> Outlook `.msg`, `.mbox`, web clip) with content-searchable attachments,
+> filesystem watching, self-hosted sync, JavaScript plugins. Remaining gaps
+> are listed honestly in [docs/STATUS.md](docs/STATUS.md).
 
 ## What it does today
 
@@ -71,8 +73,9 @@ rather than scattered across the code:
 ## Platforms
 
 The core and the CLI are pure Rust with a bundled SQLite, so there is nothing
-platform-specific to install. Developed on macOS; CI builds and smoke-tests on
-Windows and Linux too. The desktop UI is not started on any platform — see
+platform-specific to install. Developed on macOS; CI builds, tests and
+smoke-tests Windows and Linux on every push. The desktop app is verified in
+real use on macOS and Windows; Linux builds but is untested — see
 [docs/STATUS.md](docs/STATUS.md).
 
 Marius refuses to create filenames that would not open on Windows (a colon, a
@@ -85,7 +88,87 @@ lists any already in your vault with a command to fix them.
 $ cd apps/desktop && cargo run --release -- ~/path/to/your/notes
 ```
 
-Folder tree when idle (drag a note or a whole folder to move it — links are rewritten), live search as you type. ⌘K search · Enter opens · ⌘E reading mode (wiki links clickable) · ⌘N new note (`folder/name` creates folders) · ⌘S save · Esc back · ⌘⇧L theme.
+Folder tree when idle, live search as you type. Drag a note or a whole folder
+within the tree to move it (links are rewritten); drop files from the OS onto
+the window to import them.
+
+### Keyboard shortcuts
+
+| macOS | Windows / Linux | Does |
+|---|---|---|
+| ⌘K (also ⌘P, ⌘⇧F) | Ctrl+K | Focus search · Enter opens · Esc back |
+| ⌘N | Ctrl+N | New note — the search box is the name; `folder/name` creates folders |
+| ⌘S | Ctrl+S | Save (switching documents autosaves) |
+| F2 | F2 | Rename or move the open note — edit the path, links are rewritten |
+| ⌘E | Ctrl+E | Reading mode (wiki links and attachments clickable) |
+| ⌘⇧E | Ctrl+Shift+E | Live side-by-side split |
+| ⌘G | Ctrl+G | Knowledge graph |
+| ⌘B | Ctrl+B | Backlinks / related panel |
+| ⌘⇧P | Ctrl+Shift+P | Command palette (every action, plugins, templates, daily note) |
+| ⌘T | Ctrl+T | Ask the model for tags — review with ✓ / ✗ on the chips |
+| ⌘, | Ctrl+, | Settings: models per task, trust, vault privacy floor |
+| ⌘⇧T / ⌘W | Ctrl+Shift+T / Ctrl+W | Open / close tab |
+| ⌃Tab / ⌃⇧Tab | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
+| ⌘+ / ⌘− / ⌘0 | Ctrl++ / Ctrl+− / Ctrl+0 | Zoom content fonts / reset |
+| ⌘⇧L | Ctrl+Shift+L | Toggle dark / light theme |
+| ⌘R | Ctrl+R | Reindex the vault by hand (the watcher usually beats you to it) |
+| Tab / ⇧Tab | Tab / Shift+Tab | In a pipe table: next / previous cell; Enter continues the table |
+
+In the search box, `?query` searches by meaning and `??query` fuses semantic
+with keyword rank (needs an embedding model configured in Settings).
+
+## Writing notes: inline syntax
+
+Notes are ordinary Markdown (CommonMark + GFM). Marius reads a few
+conventions on top — nothing is required, and unknown frontmatter is
+preserved untouched:
+
+**Tags.** `#hardware` anywhere in the body, hierarchical with `/`:
+`#hardware/switches` matches searches for `tag:hardware` too. Letters,
+digits and `+ # . &` are kept; spaces, `_` and `-` normalise to `-`; case
+folds (`#Moog` and `#moog` are one tag). Tags inside code fences, inline
+code and URLs are ignored. Deleting the text removes the tag; tags added by
+the AI or CLI live only in the index and never touch your file.
+
+**Frontmatter.** A YAML block at the top. Marius understands:
+
+```yaml
+---
+title: Harbour survey          # overrides the filename as display title
+tags: [moog, hardware/switches] # `tag:` and `keywords:` also read
+aliases: [survey-2026]          # alternate names [[survey-2026]] resolves
+sensitivity: confidential       # unrestricted · personal · confidential · no_inference
+---
+```
+
+`sensitivity:` can only tighten the vault's floor, never loosen it; a
+`confidential` note is pinned to local models and a `no_inference` note is
+never sent to any model.
+
+**Wiki links.** `[[Note]]`, `[[Note|shown text]]`, `[[Note#Heading]]`,
+`[[Note#^block-id]]`; `![[diagram.png]]` embeds. Links resolve by title,
+path or alias; unresolved links are tracked and connect themselves when the
+target appears. Renames (F2, `marius rename`) rewrite referring files.
+
+**Callouts.** Obsidian-style, rendered with typed accents in reading mode:
+
+```markdown
+> [!warning] Mind the dredger
+> The channel closes Tuesdays.
+```
+
+`note`, `tip`, `important`, `warning`, `caution`; the title is optional.
+
+**Math.** `$e^{i\pi}$` inline and `$$ … $$` blocks are recognised and shown
+distinctly (badged, scrolling sideways) — no typesetter yet.
+
+**Tasks and tables.** `- [ ]` / `- [x]` render as checkboxes; pipe tables
+get cell navigation in the editor (Tab, ⇧Tab, Enter).
+
+**Templates and daily notes.** Files in `templates/` seed new notes
+(palette → "New from template", `marius new --template`), with `{{date}}`,
+`{{time}}` and `{{title}}` expanded. The palette's "Daily note" (or
+`marius daily`) opens today's note, creating it from the daily template.
 
 ## Install
 
@@ -163,12 +246,17 @@ crates/
   indexing/        Durable file I/O, vault scanning, reconciliation, pipeline.
   search/          Query language.
   core/            Application services: vaults, documents, search, graph.
-  graph/ llm/ llm-policy/ classification/ embeddings/ import/   (scaffolded)
+  graph/           Link graph assembly and traversal.
+  llm/ llm-policy/ Ollama + OpenAI-compatible adapters; the privacy policy engine.
+  classification/  Tagging, summaries, grounded Q&A, relationship discovery.
+  embeddings/      Chunk embedding and the vector store.
+  import/          HTML, PDF, Word, EPUB, .eml, Outlook .msg, .mbox, web clip.
+  sync-service/ plugin-host/   Sync client logic; the Boa JavaScript plugin runtime.
   ui-gpui/         Desktop UI: tested buffer/highlight models + GPUI shell
 apps/
   cli/             The `marius` command
   desktop/         The desktop app (own workspace; gpui is 2.5 GB of deps)
-  sync-server/     (not started; excluded from the workspace)
+  sync-server/     Self-hosted sync: one binary, one SQLite file, a bearer token.
 docs/
   ARCHITECTURE.md  How it fits together and why
   TRACEABILITY.md  Every requirement ID → where it is implemented and tested
@@ -180,7 +268,7 @@ docs/
 ## Testing
 
 ```console
-$ cargo test --workspace     # 525 tests
+$ cargo test --workspace     # ~645 tests; the UI crate adds ~85 more
 $ cargo clippy --workspace --all-targets
 ```
 
