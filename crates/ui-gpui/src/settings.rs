@@ -331,7 +331,17 @@ impl gpui::Render for SettingsView {
                         .text_color(theme.muted)
                         .child(label),
                 )
-                .child(div().flex_1().child(editor))
+                .child(
+                    // The editor paints size_full: without a sized box it
+                    // collapses to zero height and cannot be clicked.
+                    div()
+                        .flex_1()
+                        .h(px(30.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(editor),
+                )
                 .child(
                     div()
                         .w(px(230.))
