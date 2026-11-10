@@ -57,14 +57,31 @@ pub fn tagging_request(
          \"cisco-c9200l-48p-4x-e\"), program and project names, vendors, \
          protocols, standards, people's organisations, places — the words \
          the author would type into search. Add at most two broader topic \
-         tags after the specific ones. Reuse the vault's existing tags when \
-         they genuinely fit; never force one. No commentary."
+         tags after the specific ones. Always tag the proper names the note \
+         is about — the program, project or system it concerns — even when \
+         they appear only once. Reuse the vault's existing tags when they \
+         genuinely fit; never force one. No commentary."
     );
-    let user = if vocab.is_empty() {
+    let mut user = if vocab.is_empty() {
         format!("Title: {title}\n\n{body_excerpt}")
     } else {
         format!("Existing tags: {vocab}\n\nTitle: {title}\n\n{body_excerpt}")
     };
+    // A long note is excerpted, but its later section headings often carry
+    // exactly the names worth tagging (the program, the part): show them.
+    let tail_headings: Vec<&str> = body[body_excerpt.len()..]
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with('#'))
+        .take(20)
+        .collect();
+    if !tail_headings.is_empty() {
+        user.push_str("\n\nSection headings later in the note:\n");
+        for heading in tail_headings {
+            user.push_str(heading);
+            user.push('\n');
+        }
+    }
     ChatRequest {
         system,
         user,
@@ -304,6 +321,20 @@ mod tests {
         assert!(request.user.contains("Existing tags: lighthouse, survey"));
         assert!(request.user.len() < 7_000, "body got truncated");
         assert_eq!(request.temperature, 0.0);
+    }
+
+    #[test]
+    fn a_long_note_still_shows_its_later_headings() {
+        let mut body = "x".repeat(10_000);
+        body.push_str("\n## Project Lighthouse rollout\n\nmore prose\n");
+        let request = tagging_request("T", &body, &[], 8);
+        assert!(
+            request.user.contains("## Project Lighthouse rollout"),
+            "a heading beyond the excerpt budget must still reach the model"
+        );
+        // A short note gets no redundant headings section.
+        let request = tagging_request("T", "## Here\n\nshort", &[], 8);
+        assert!(!request.user.contains("Section headings later"));
     }
 
     #[test]

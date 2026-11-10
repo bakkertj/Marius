@@ -382,6 +382,10 @@ enum TagCommand {
         /// Store accepted proposals as unreviewed machine assignments.
         #[arg(long)]
         apply: bool,
+        /// Also print the model's verbatim reply — to tell "the model
+        /// never proposed it" from "the tag filter dropped it".
+        #[arg(long)]
+        raw: bool,
     },
 }
 
@@ -1275,9 +1279,19 @@ fn tag_command(app: &mut Marius, command: &TagCommand, json: bool) -> Result<()>
             }
             Ok(())
         }
-        TagCommand::Suggest { document, apply } => {
+        TagCommand::Suggest {
+            document,
+            apply,
+            raw,
+        } => {
             let (_, found) = DocumentRef::resolve(app, document)?;
             let result = app.suggest_tags(found.id, *apply)?;
+            if *raw {
+                match &result.raw_reply {
+                    Some(reply) => eprintln!("model replied verbatim:\n{reply}\n"),
+                    None => eprintln!("no model reply (the request was refused before dialling)"),
+                }
+            }
             if json {
                 let names: Vec<&str> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
                 println!(

@@ -1282,6 +1282,7 @@ impl Marius {
                     suggestions,
                     applied,
                     skipped,
+                    raw_reply: Some(response.text),
                 })
             }
             Err(error) => {
@@ -2779,6 +2780,10 @@ pub struct SuggestedTags {
     pub applied: Vec<marius_model::TagName>,
     /// Refused by the storage gate: rejected or pinned (TAG-006, TAG-012).
     pub skipped: Vec<marius_model::TagName>,
+    /// The model's verbatim reply — what it proposed before parsing and
+    /// the prose-fragment guard. The only way to tell "the model never
+    /// said it" from "Marius filtered it out".
+    pub raw_reply: Option<String>,
 }
 
 impl SuggestedTags {
@@ -2789,6 +2794,7 @@ impl SuggestedTags {
             suggestions: Vec::new(),
             applied: Vec::new(),
             skipped: Vec::new(),
+            raw_reply: None,
         }
     }
 }
