@@ -71,17 +71,13 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-shift-e")), ToggleSplit, None),
         // Ask the configured model for tags (TAG-005).
         KeyBinding::new(key(format!("{primary}-t")), SuggestTags, None),
-        // Font zoom, ctrl-shift-plus / ctrl-shift-minus / ctrl-shift-0.
-        // macOS folds shift into the produced character, so every
-        // spelling the platform might report is bound: shift-= is "+",
-        // shift-- is "_", shift-0 is ")".
-        KeyBinding::new("ctrl-shift-=", ZoomIn, None),
-        KeyBinding::new("ctrl-shift-+", ZoomIn, None),
-        KeyBinding::new("ctrl-+", ZoomIn, None),
-        KeyBinding::new("ctrl-shift--", ZoomOut, None),
-        KeyBinding::new("ctrl-_", ZoomOut, None),
-        KeyBinding::new("ctrl-shift-0", ZoomReset, None),
-        KeyBinding::new("ctrl-)", ZoomReset, None),
+        // Font zoom, the platform convention: ⌘+/⌘−/⌘0 on macOS,
+        // Ctrl elsewhere. Plus is shift-equals on most layouts, so both
+        // faces of that key are bound.
+        KeyBinding::new(key(format!("{primary}-=")), ZoomIn, None),
+        KeyBinding::new(key(format!("{primary}-+")), ZoomIn, None),
+        KeyBinding::new(key(format!("{primary}--")), ZoomOut, None),
+        KeyBinding::new(key(format!("{primary}-0")), ZoomReset, None),
         // The knowledge graph (GRAPH-001).
         KeyBinding::new(key(format!("{primary}-g")), ToggleGraph, None),
     ]
