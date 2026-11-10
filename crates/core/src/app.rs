@@ -2456,9 +2456,27 @@ impl Marius {
                 skipped = failed;
                 notes.extend(parsed);
             }
+            "pdf" => {
+                notes.push(
+                    marius_import::documents::import_pdf(&bytes, &stem)
+                        .map_err(|e| CoreError::Inference(e.to_string()))?,
+                );
+            }
+            "docx" => {
+                notes.push(
+                    marius_import::documents::import_docx(&bytes, &stem)
+                        .map_err(|e| CoreError::Inference(e.to_string()))?,
+                );
+            }
+            "epub" => {
+                notes.push(
+                    marius_import::documents::import_epub(&bytes, &stem)
+                        .map_err(|e| CoreError::Inference(e.to_string()))?,
+                );
+            }
             other => {
                 return Err(CoreError::Inference(format!(
-                    "no importer for .{other} (markdown, txt, html, eml, mbox)"
+                    "no importer for .{other} (markdown, txt, html, pdf, docx, epub, eml, mbox)"
                 )));
             }
         }
@@ -2472,6 +2490,46 @@ impl Marius {
             report.imported.push(document);
         }
         Ok(report)
+    }
+
+    /// Clip a web page into the vault (IM-012): fetched, converted,
+    /// titled by the page, with the URL in frontmatter as `source:`.
+    pub fn import_url(
+        &mut self,
+        vault: &Vault,
+        url: &str,
+        folder: Option<&VaultPath>,
+    ) -> Result<Document> {
+        if !url.starts_with("https://") && !url.starts_with("http://") {
+            return Err(CoreError::Inference(format!("not a web address: {url}")));
+        }
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("marius-clipper")
+            .build()
+            .expect("constructing an HTTP client cannot fail with these options");
+        let response = client
+            .get(url)
+            .send()
+            .map_err(|e| CoreError::Inference(format!("cannot fetch {url}: {e}")))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(CoreError::Inference(format!(
+                "{url} answered HTTP {status}"
+            )));
+        }
+        let html = response
+            .text()
+            .map_err(|e| CoreError::Inference(e.to_string()))?;
+        let fallback = url
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("clipping");
+        let note = marius_import::html::import(&html, fallback, Some(url))
+            .map_err(|e| CoreError::Inference(e.to_string()))?;
+        self.place_imported(vault, folder, &note)
     }
 
     fn place_imported(

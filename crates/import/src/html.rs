@@ -10,7 +10,7 @@ pub fn import(
     fallback_title: &str,
     source: Option<&str>,
 ) -> Result<ImportedNote, ImportError> {
-    let markdown = htmd::convert(html).map_err(|e| ImportError::Html(e.to_string()))?;
+    let markdown = crate::html_to_markdown(html).map_err(|e| ImportError::Html(e.to_string()))?;
     let title = extract_title(html).unwrap_or_else(|| fallback_title.to_owned());
 
     let mut body = String::from("---\n");

@@ -13,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod documents;
 pub mod email;
 pub mod html;
 
@@ -42,6 +43,17 @@ pub enum ImportError {
     UnparseableMessage,
     #[error("cannot convert the HTML: {0}")]
     Html(String),
+    #[error("{0}")]
+    Document(String),
+}
+
+/// HTML → Markdown with the chrome stripped: styles, scripts and
+/// navigation are markup, not knowledge.
+pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
+    htmd::HtmlToMarkdown::builder()
+        .skip_tags(vec!["style", "script", "noscript", "head", "nav", "iframe"])
+        .build()
+        .convert(html)
 }
 
 /// Escape a string for a double-quoted YAML scalar.

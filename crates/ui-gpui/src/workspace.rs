@@ -119,6 +119,7 @@ enum PaletteAction {
     NewTab,
     CloseTab,
     DailyNote,
+    CaptureClipboard,
     NewFromTemplate(String),
     Reindex,
     ToggleReading,
@@ -1143,6 +1144,103 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Files dropped from the OS (IM-010): each through the importer,
+    /// the first resulting note opened.
+    fn import_dropped(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        let vault = self.vault.clone();
+        let mut imported = 0usize;
+        let mut first: Option<DocumentId> = None;
+        let mut failures: Vec<String> = Vec::new();
+        for path in paths {
+            match self.app.borrow_mut().import_file(&vault, &path, None) {
+                Ok(report) => {
+                    imported += report.imported.len();
+                    if first.is_none() {
+                        first = report.imported.first().map(|d| d.id);
+                    }
+                }
+                Err(error) => failures.push(format!(
+                    "{}: {error}",
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                )),
+            }
+        }
+        self.status = if failures.is_empty() {
+            format!("imported {imported} note(s)").into()
+        } else {
+            format!("imported {imported}; {}", failures.join("; ")).into()
+        };
+        self.rebuild_tree(cx);
+        self.refresh_tags();
+        if let Some(id) = first {
+            self.open(id, cx);
+        }
+        cx.notify();
+    }
+
+    /// Palette: a new note from whatever text is on the clipboard
+    /// (IM-002/IM-010's capture half).
+    fn capture_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            self.status = "the clipboard holds no text".into();
+            cx.notify();
+            return;
+        };
+        // First line (or first words) names the note.
+        let title: String = text
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("Clipping")
+            .trim_start_matches('#')
+            .trim()
+            .chars()
+            .take(60)
+            .collect();
+        let name = marius_model::sanitize(&format!("{title}.md"));
+        let vault = self.vault.clone();
+        let mut path = VaultPath::new(name.clone()).ok();
+        let mut counter = 1usize;
+        while let Some(candidate) = &path {
+            let exists = self
+                .app
+                .borrow()
+                .document_at(vault.id, candidate)
+                .ok()
+                .flatten()
+                .is_some();
+            if !exists {
+                break;
+            }
+            counter += 1;
+            let stem = name.trim_end_matches(".md");
+            path = VaultPath::new(format!("{stem} (clipped {counter}).md")).ok();
+        }
+        let Some(path) = path else {
+            self.status = "cannot name the clipping".into();
+            cx.notify();
+            return;
+        };
+        let body = if text.trim_start().starts_with('#') {
+            text.clone()
+        } else {
+            format!("# {title}\n\n{text}\n")
+        };
+        let created = self.app.borrow_mut().create_document(&vault, &path, &body);
+        match created {
+            Ok(document) => {
+                self.rebuild_tree(cx);
+                self.open(document.id, cx);
+                let handle = self.editor.read(cx).focus_handle(cx);
+                window.focus(&handle);
+                self.status = format!("clipped to {}", document.path).into();
+            }
+            Err(error) => self.status = format!("clip: {error}").into(),
+        }
+        cx.notify();
+    }
+
     /// ⌘⇧P: open the palette with everything runnable right now —
     /// built-in actions plus every enabled plugin's commands (UI-006).
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1151,6 +1249,7 @@ impl Workspace {
             ("New tab", PaletteAction::NewTab),
             ("Close tab", PaletteAction::CloseTab),
             ("Open today's daily note", PaletteAction::DailyNote),
+            ("New note from clipboard", PaletteAction::CaptureClipboard),
             ("Save document", PaletteAction::Save),
             ("Suggest tags for this note", PaletteAction::SuggestTags),
             ("Toggle reading view", PaletteAction::ToggleReading),
@@ -1269,6 +1368,7 @@ impl Workspace {
             PaletteAction::NewNote => self.new_note(window, cx),
             PaletteAction::NewTab => self.new_tab(window, cx),
             PaletteAction::CloseTab => self.close_tab(self.active_tab, window, cx),
+            PaletteAction::CaptureClipboard => self.capture_clipboard(window, cx),
             PaletteAction::DailyNote => {
                 let vault = self.vault.clone();
                 let result = self.app.borrow_mut().daily_note(&vault);
@@ -2415,6 +2515,12 @@ impl Render for Workspace {
             .bg(theme.background)
             .text_color(theme.text)
             .text_size(px(14.))
+            // Files dragged in from the OS import in place (IM-010).
+            .on_drop(
+                cx.listener(|this, paths: &gpui::ExternalPaths, _window, cx| {
+                    this.import_dropped(paths.paths().to_vec(), cx)
+                }),
+            )
             .child(
                 div()
                     .flex()

@@ -57,7 +57,7 @@ pub fn import_eml(raw: &[u8]) -> Result<ImportedNote, ImportError> {
     // and fall back to plain text. A message with neither still
     // imports: the headers alone are knowledge.
     let body_markdown = match message.body_html(0) {
-        Some(html) => htmd::convert(&html)
+        Some(html) => crate::html_to_markdown(&html)
             .map_err(|e| ImportError::Html(e.to_string()))?
             .trim()
             .to_owned(),

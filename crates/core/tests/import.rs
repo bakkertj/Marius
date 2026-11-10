@@ -138,3 +138,42 @@ fn unknown_formats_are_refused_with_the_supported_list() {
     let error = h.app.import_file(&vault, &weird, None).unwrap_err();
     assert!(error.to_string().contains("no importer for .heic"));
 }
+
+#[test]
+fn a_docx_and_an_epub_arrive_as_notes() {
+    use std::io::Write;
+    let mut h = harness();
+    // Minimal DOCX: a zip holding word/document.xml.
+    let docx = {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file(
+                    "word/document.xml",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            writer
+                .write_all(
+                    br#"<w:document xmlns:w="w"><w:body>
+                        <w:p><w:r><w:t>Minutes of the lighthouse committee.</w:t></w:r></w:p>
+                        </w:body></w:document>"#,
+                )
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        buffer.into_inner()
+    };
+    let path = h.inbox.path().join("minutes.docx");
+    std::fs::write(&path, docx).unwrap();
+    let vault = h.vault.clone();
+    let report = h.app.import_file(&vault, &path, None).unwrap();
+    assert_eq!(report.imported.len(), 1);
+    let hits = h
+        .app
+        .search("committee", SearchOptions::default())
+        .unwrap()
+        .hits;
+    assert_eq!(hits.len(), 1, "DOCX text is searchable (IM-008)");
+}

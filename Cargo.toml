@@ -65,6 +65,9 @@ walkdir = "2"
 htmd = "0.2"
 boa_engine = "0.20"
 mail-parser = "0.11"
+pdf-extract = "0.9"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }

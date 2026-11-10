@@ -64,11 +64,15 @@ enum Command {
     /// Drop and rebuild every derived index, keeping all metadata.
     Rebuild,
 
-    /// Import external files: Markdown, text, HTML, .eml, .mbox
-    /// (IM-008/009/011). Everything indexes immediately.
+    /// Import external content: Markdown, text, HTML, PDF, Word,
+    /// EPUB, .eml, .mbox files — or a web page by URL
+    /// (IM-008/009/011/012). Everything indexes immediately.
     Import {
         /// Files to import.
         files: Vec<PathBuf>,
+        /// Clip a web page instead of (or as well as) files.
+        #[arg(long)]
+        url: Vec<String>,
         /// Vault name. Omit when exactly one vault is open.
         #[arg(long)]
         vault: Option<String>,
@@ -505,10 +509,11 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Watch { vault, debounce } => watch_command(&mut app, vault.as_deref(), *debounce),
         Command::Import {
             files,
+            url,
             vault,
             folder,
         } => {
-            if files.is_empty() {
+            if files.is_empty() && url.is_empty() {
                 anyhow::bail!("nothing to import");
             }
             let vault = one_vault(&app, vault.as_deref())?;
@@ -529,6 +534,10 @@ fn run(cli: &Cli) -> Result<()> {
                         report.skipped
                     );
                 }
+            }
+            for address in url {
+                let document = app.import_url(&vault, address, folder.as_ref())?;
+                println!("clipped {} → {}", address, document.path);
             }
             Ok(())
         }

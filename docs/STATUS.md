@@ -216,7 +216,11 @@ line.
   frontmatter, attachments land beside the note) and `.mbox` (one note
   per message, thread identifiers kept). Names are made Windows-portable
   on the way in, collisions get numbered variants, everything indexes
-  immediately. PDF and Word extraction remain open.
+  immediately. PDF (extractor fenced; textless scans refused with an
+  OCR pointer), Word and EPUB extract to searchable Markdown;
+  `marius import --url` clips a web page with its styles and scripts
+  stripped; files dropped onto the window import in place and the
+  palette captures the clipboard into a new note. OCR remains open.
 - **JavaScript plugins** — `marius plugin install/enable/grant/run`. A
   plugin is a directory with `manifest.json` and `main.js`, run inside
   Boa (pure Rust: no native toolchain anywhere, including Windows). It

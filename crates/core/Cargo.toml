@@ -27,6 +27,7 @@ time = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+zip = { workspace = true }
 marius-sync-service = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
