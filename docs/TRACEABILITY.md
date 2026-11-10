@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **130 done, 23 partial, 9 ready, 32 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **131 done, 22 partial, 9 ready, 32 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -62,7 +62,7 @@ Totals of 194 requirement IDs: **130 done, 23 partial, 9 ready, 32 open**. Every
 |---|---|---|---|
 | MD-001 | done | `buffer.rs`, `editor.rs` | Typed, saved, undone via real keystrokes; file-level assertions. |
 | MD-002 | done | `markdown::{scan,text}` | `tables_checklists_and_quotes_are_flattened` |
-| MD-003 | partial | `editor.rs`, `preview.rs` | Source editing and rendered reading (⌘E) done, wiki links clickable; live side-by-side preview pending. |
+| MD-003 | done | `editor.rs`, `preview.rs`, `ViewMode::Split` | All three modes: source (⌘E back), rendered reading (⌘E), and live side-by-side (⌘⇧E) following every keystroke. |
 | MD-004 | done | `buffer` undo, autosave-on-switch, `files::write_atomic` | Word-grouped undo/redo; autosave; atomic saves + revisions. |
 | MD-005 | done | `scan` images, `index_attachment` | `attachments_are_indexed_by_name_without_being_read_as_text` |
 | MD-006 | done | `markdown::scan`, `documents::resolve_relative` | `wiki_link_aliases_headings_and_block_refs_are_decomposed` + 7 |

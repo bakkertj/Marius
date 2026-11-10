@@ -255,13 +255,20 @@ pub struct Editor {
     single_line: bool,
     /// Shown dimmed when the buffer is empty.
     placeholder: SharedString,
+    /// Blink phase: the cursor paints only while true. Reset to visible by
+    /// every edit or movement, so the cursor never blinks away mid-typing.
+    cursor_visible: bool,
+    /// When the cursor last moved or the text last changed.
+    last_activity: std::time::Instant,
+    /// Offset painted last frame, to detect movement centrally.
+    last_painted_cursor: Option<usize>,
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
 
 impl Editor {
     pub fn new(cx: &mut Context<Self>, theme: Theme, resolver: Box<dyn LinkResolver>) -> Self {
-        Self {
+        let editor = Self {
             buffer: Buffer::new(""),
             focus_handle: cx.focus_handle(),
             theme,
@@ -274,7 +281,35 @@ impl Editor {
             resolver,
             single_line: false,
             placeholder: SharedString::default(),
-        }
+            cursor_visible: true,
+            last_activity: std::time::Instant::now(),
+            last_painted_cursor: None,
+        };
+        // The blink clock. One task per editor, alive as long as it is;
+        // a settled cursor alternates every half second, and any activity
+        // snaps it back on (handled in `wake_cursor`).
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(530))
+                .await;
+            let Ok(()) = this.update(cx, |editor: &mut Editor, cx| {
+                let settled =
+                    editor.last_activity.elapsed() >= std::time::Duration::from_millis(500);
+                let next = if settled {
+                    !editor.cursor_visible
+                } else {
+                    true
+                };
+                if next != editor.cursor_visible {
+                    editor.cursor_visible = next;
+                    cx.notify();
+                }
+            }) else {
+                break;
+            };
+        })
+        .detach();
+        editor
     }
 
     /// A compact single-line field sharing all of the editor's machinery.
@@ -953,7 +988,7 @@ impl gpui::Element for EditorElement {
                 .collect();
         }
 
-        let cursor_quad = (focused && selection.is_empty()).then(|| {
+        let cursor_quad = (focused && selection.is_empty() && editor.cursor_visible).then(|| {
             let pos = layout.position_of(cursor_offset);
             fill(
                 Bounds::new(
@@ -964,10 +999,17 @@ impl gpui::Element for EditorElement {
             )
         });
 
-        // Persist the corrected scroll.
+        // Persist the corrected scroll, and wake the cursor on any
+        // movement or edit: comparing here catches every path — typing,
+        // arrows, mouse, IME — without touching each of them.
         self.editor.update(cx, |editor, _| {
             editor.scroll_y = scroll_y;
             editor.scroll_to_cursor = false;
+            if editor.last_painted_cursor != Some(cursor_offset) {
+                editor.last_painted_cursor = Some(cursor_offset);
+                editor.cursor_visible = true;
+                editor.last_activity = std::time::Instant::now();
+            }
         });
 
         Frame {

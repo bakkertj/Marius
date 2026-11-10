@@ -94,9 +94,10 @@ reading mode is also how you browse. Rendering goes through a pure,
 unit-tested block model; the first user-reported bug (body text drawn in the
 default black over the dark theme, because `StyledText` does not inherit the
 surrounding colour) is fixed by threading a theme-derived base style through
-every inline. Still missing from MD-003: live side-by-side preview.
+every inline. ⌘⇧E opens the live side-by-side split, the preview following every keystroke — MD-003's three modes are complete.
 The editor's remaining known gaps: Home/End use logical lines under soft
-wrap, no line numbers, no cursor blink, single window, no tabs or splits.
+wrap, no line numbers, single window, no tabs beyond the editor/preview
+split.
 
 ## Works today
 

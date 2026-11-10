@@ -38,6 +38,7 @@ actions!(
         OpenSelected,
         ReindexVault,
         ToggleReading,
+        ToggleSplit,
         ToggleGraph
     ]
 );
@@ -62,6 +63,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-r")), ReindexVault, None),
         // Edit <-> rendered reading, the toggle every Markdown app shares.
         KeyBinding::new(key(format!("{primary}-e")), ToggleReading, None),
+        // Side-by-side preview (MD-003).
+        KeyBinding::new(key(format!("{primary}-shift-e")), ToggleSplit, None),
         // The knowledge graph (GRAPH-001).
         KeyBinding::new(key(format!("{primary}-g")), ToggleGraph, None),
     ]
@@ -197,6 +200,9 @@ impl Render for DragGhost {
 enum ViewMode {
     Edit,
     Reading,
+    /// Editor and rendered preview side by side, the preview following
+    /// every keystroke (MD-003's third mode).
+    Split,
     /// The knowledge graph (GRAPH-001), local or global (GRAPH-005).
     Graph,
 }
@@ -549,7 +555,7 @@ impl Workspace {
                 if let Ok(text) = text {
                     self.editor
                         .update(cx, |editor, cx| editor.set_text(&text, cx));
-                    if self.mode == ViewMode::Reading {
+                    if matches!(self.mode, ViewMode::Reading | ViewMode::Split) {
                         let source = self.editor.read(cx).text().to_owned();
                         self.preview
                             .update(cx, |preview, cx| preview.set_source(&source, cx));
@@ -593,7 +599,7 @@ impl Workspace {
                         *self.preview_base.base.borrow_mut() = Some(document.path.clone());
                     }
                 }
-                if self.mode == ViewMode::Reading {
+                if matches!(self.mode, ViewMode::Reading | ViewMode::Split) {
                     let text = self.editor.read(cx).text().to_owned();
                     self.preview
                         .update(cx, |preview, cx| preview.set_source(&text, cx));
@@ -754,7 +760,16 @@ impl Workspace {
     ) {
         match event {
             EditorEvent::SaveRequested => self.autosave(cx),
-            EditorEvent::Edited => cx.notify(), // dirty dot, line:col
+            EditorEvent::Edited => {
+                // The split preview follows every keystroke (MD-003);
+                // parsing a note is cheap next to repainting it.
+                if self.mode == ViewMode::Split {
+                    let text = self.editor.read(cx).text().to_owned();
+                    self.preview
+                        .update(cx, |preview, cx| preview.set_source(&text, cx));
+                }
+                cx.notify(); // dirty dot, line:col
+            }
             // Escape in the document goes back to the list (UI-003's loop:
             // ⌘K down, Escape up). The old query is selected, not kept as a
             // live cursor: typing should replace it, not append to it.
@@ -783,10 +798,29 @@ impl Workspace {
                     .update(cx, |preview, cx| preview.set_source(&text, cx));
                 ViewMode::Reading
             }
-            ViewMode::Reading | ViewMode::Graph => {
+            ViewMode::Reading | ViewMode::Split | ViewMode::Graph => {
                 let handle = self.editor.read(cx).focus_handle(cx);
                 window.focus(&handle);
                 ViewMode::Edit
+            }
+        };
+        cx.notify();
+    }
+
+    fn on_toggle_split(&mut self, _: &ToggleSplit, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = match self.mode {
+            ViewMode::Split => {
+                let handle = self.editor.read(cx).focus_handle(cx);
+                window.focus(&handle);
+                ViewMode::Edit
+            }
+            _ => {
+                let text = self.editor.read(cx).text().to_owned();
+                self.preview
+                    .update(cx, |preview, cx| preview.set_source(&text, cx));
+                let handle = self.editor.read(cx).focus_handle(cx);
+                window.focus(&handle);
+                ViewMode::Split
             }
         };
         cx.notify();
@@ -1242,12 +1276,12 @@ impl Workspace {
                     .gap(px(14.))
                     .child(format!("ln {}, col {}", line + 1, column + 1))
                     .child(SharedString::from(format!(
-                        "{} · {} · ⌘K search · ⌘N new · ⌘S save · ⌘E {} · ⌘G graph · ⌘⇧L {}",
+                        "{} · {} · ⌘K search · ⌘N new · ⌘S save · ⌘E {} · ⌘⇧E split · ⌘G graph · ⌘⇧L {}",
                         self.vault.name,
                         self.status,
                         match self.mode {
                             ViewMode::Edit => "read",
-                            ViewMode::Reading | ViewMode::Graph => "edit",
+                            ViewMode::Reading | ViewMode::Split | ViewMode::Graph => "edit",
                         },
                         self.theme.appearance.toggled().label(),
                     ))),
@@ -1277,6 +1311,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(Self::on_toggle_appearance))
             .on_action(cx.listener(Self::on_toggle_reading))
+            .on_action(cx.listener(Self::on_toggle_split))
             .on_action(cx.listener(Self::on_toggle_graph))
             .on_action(cx.listener(|this, _: &NewNote, window, cx| this.new_note(window, cx)))
             .on_action(cx.listener(|this, _: &ReindexVault, _w, cx| this.reindex(cx)))
@@ -1301,11 +1336,34 @@ impl Render for Workspace {
                             .h_full()
                             .min_w(px(0.))
                             .child(self.render_properties())
-                            .child(div().flex_grow().min_h(px(0.)).child(match self.mode {
-                                ViewMode::Edit => self.editor.clone().into_any_element(),
-                                ViewMode::Reading => self.preview.clone().into_any_element(),
-                                ViewMode::Graph => self.graph.clone().into_any_element(),
-                            })),
+                            .child(
+                                div().flex_grow().min_h(px(0.)).child(match self.mode {
+                                    ViewMode::Edit => self.editor.clone().into_any_element(),
+                                    ViewMode::Reading => self.preview.clone().into_any_element(),
+                                    ViewMode::Split => div()
+                                        .flex()
+                                        .flex_row()
+                                        .size_full()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.))
+                                                .h_full()
+                                                .border_r_1()
+                                                .border_color(theme.border)
+                                                .child(self.editor.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.))
+                                                .h_full()
+                                                .child(self.preview.clone()),
+                                        )
+                                        .into_any_element(),
+                                    ViewMode::Graph => self.graph.clone().into_any_element(),
+                                }),
+                            ),
                     ),
             )
             .child(self.render_status(cx))
