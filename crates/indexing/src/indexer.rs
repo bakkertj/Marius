@@ -79,6 +79,11 @@ pub struct IndexOptions {
     /// Documents per transaction. Smaller is more resumable, larger is faster.
     pub batch_size: usize,
     pub thoroughness: Thoroughness,
+    /// This pass is applying *replicated* state: keep the revision the
+    /// replica writer stored and journal nothing, or every applied
+    /// operation would echo back to its origin with a bumped revision and
+    /// two devices would ping-pong forever (SYNC-010).
+    pub replica: bool,
 }
 
 impl Default for IndexOptions {
@@ -91,6 +96,7 @@ impl Default for IndexOptions {
             revision_body_limit: 256 * 1024,
             link_vaults: Vec::new(),
             batch_size: 64,
+            replica: false,
             thoroughness: Thoroughness::default(),
         }
     }
@@ -288,10 +294,14 @@ pub fn index_file(
     }
 
     let document = build_document(vault, file, existing, &parsed, &contents);
-    documents::upsert(conn, &document)?;
+    if options.replica {
+        documents::upsert_unjournaled(conn, &document)?;
+    } else {
+        documents::upsert(conn, &document)?;
+    }
     documents::set_aliases(conn, document.id, &parsed.aliases)?;
 
-    apply_file_tags(conn, vault, &document, &parsed)?;
+    apply_file_tags(conn, vault, &document, &parsed, options)?;
     let unresolved = apply_links(conn, vault, &document, &parsed, options)?;
     report.links_unresolved += unresolved;
 
@@ -359,7 +369,11 @@ fn index_attachment(
         frontmatter: existing.map(|e| e.frontmatter.clone()).unwrap_or_default(),
         external: false,
     };
-    documents::upsert(conn, &document)?;
+    if options.replica {
+        documents::upsert_unjournaled(conn, &document)?;
+    } else {
+        documents::upsert(conn, &document)?;
+    }
     if let Some(seq) = documents::seq_of(conn, document.id)? {
         search_index::index(
             conn,
@@ -451,6 +465,7 @@ fn apply_file_tags(
     vault: &Vault,
     document: &Document,
     parsed: &ParsedDocument,
+    options: &IndexOptions,
 ) -> Result<()> {
     let mut proposed = Vec::with_capacity(parsed.tags.len());
     for found in &parsed.tags {
@@ -459,7 +474,11 @@ fn apply_file_tags(
             // not a tag.
             continue;
         };
-        let tag = tags::ensure(conn, Some(vault.id), &name)?;
+        let tag = if options.replica {
+            marius_storage::replica::ensure_tag(conn, Some(vault.id), &name)?
+        } else {
+            tags::ensure(conn, Some(vault.id), &name)?
+        };
         let source = match found.origin {
             TagOrigin::Inline => TagSource::Inline,
             TagOrigin::Frontmatter => TagSource::Frontmatter,

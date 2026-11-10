@@ -17,6 +17,7 @@ marius-llm = { workspace = true }
 marius-llm-policy = { workspace = true }
 marius-classification = { workspace = true }
 marius-embeddings = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -24,5 +25,6 @@ time = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+marius-sync-service = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

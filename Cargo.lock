@@ -835,7 +835,9 @@ dependencies = [
  "marius-model",
  "marius-search",
  "marius-storage",
+ "marius-sync-service",
  "pretty_assertions",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -953,6 +955,18 @@ dependencies = [
  "time",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "marius-sync-service"
+version = "0.1.0"
+dependencies = [
+ "marius-model",
+ "pretty_assertions",
+ "rusqlite",
+ "serde_json",
+ "thiserror",
+ "time",
 ]
 
 [[package]]

@@ -9,6 +9,7 @@ members = [
     "crates/graph",
     "crates/llm",
     "crates/llm-policy",
+    "crates/sync-service",
     "crates/classification",
     "crates/embeddings",
     "crates/import",
@@ -38,6 +39,7 @@ marius-search = { path = "crates/search" }
 marius-graph = { path = "crates/graph" }
 marius-llm = { path = "crates/llm" }
 marius-llm-policy = { path = "crates/llm-policy" }
+marius-sync-service = { path = "crates/sync-service" }
 marius-classification = { path = "crates/classification" }
 marius-embeddings = { path = "crates/embeddings" }
 marius-import = { path = "crates/import" }

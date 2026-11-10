@@ -1,0 +1,18 @@
+[package]
+name = "marius-sync-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The self-hosted sync service's store and protocol logic (SYNC-004)"
+
+[dependencies]
+marius-model = { workspace = true }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

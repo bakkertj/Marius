@@ -67,7 +67,10 @@ pub use portability::{sanitize, travels_everywhere, windows_issues, Portability}
 pub use provenance::{Authorship, Confidence, Provenance, ReviewState};
 pub use relationship::{Endpoints, RejectedRelationship, Relationship, RelationshipKind};
 pub use revision::{DocumentRevision, RevisionCause};
-pub use sync::{ChangeKind, EntityKind, LogicalTimestamp, SyncOperation, SyncState};
+pub use sync::{
+    ChangeKind, EntityKind, LogicalTimestamp, PullResponse, PushConflict, PushRequest,
+    PushResponse, SyncEnvelope, SyncOperation, SyncPayload, SyncState,
+};
 pub use tag::{DocumentTag, RejectedTag, Tag, TagName, TagNameError, TagSource};
 
 /// The application's name, used in file headers, user agents and frontmatter keys.

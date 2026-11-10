@@ -118,8 +118,55 @@ pub fn upsert(conn: &Connection, document: &Document) -> Result<u64> {
     Ok(revision as u64)
 }
 
+/// [`upsert`] for an *apply-replication* index pass: the row's stored
+/// revision is kept (the replica writer already set the remote value) and
+/// nothing is journaled — re-journaling what another device told us would
+/// echo the operation straight back (SYNC-010).
+pub fn upsert_unjournaled(conn: &Connection, document: &Document) -> Result<()> {
+    conn.execute(
+        "INSERT INTO document
+            (id, vault_id, path, title, kind, authorship, content_hash, size_bytes,
+             created_at, modified_at, indexed_at, archived_at, sensitivity, frontmatter,
+             external, revision)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1)
+         ON CONFLICT(id) DO UPDATE SET
+            vault_id = excluded.vault_id,
+            path = excluded.path,
+            title = excluded.title,
+            kind = excluded.kind,
+            authorship = excluded.authorship,
+            content_hash = excluded.content_hash,
+            size_bytes = excluded.size_bytes,
+            modified_at = excluded.modified_at,
+            indexed_at = excluded.indexed_at,
+            archived_at = excluded.archived_at,
+            sensitivity = excluded.sensitivity,
+            frontmatter = excluded.frontmatter,
+            external = excluded.external",
+        params![
+            document.id.to_sql_blob(),
+            document.vault.to_sql_blob(),
+            document.path.as_str(),
+            document.title,
+            document.kind.as_str(),
+            document.authorship.as_str(),
+            hash_to_sql(&document.content_hash),
+            document.size_bytes as i64,
+            time_to_sql(document.created_at),
+            time_to_sql(document.modified_at),
+            time_to_sql(document.indexed_at),
+            document.archived_at.map(time_to_sql),
+            document.sensitivity.map(|s| s.as_str()),
+            json_to_sql(&document.frontmatter)?,
+            bool_to_sql(document.external),
+        ],
+    )?;
+    refresh_names(conn, document)?;
+    Ok(())
+}
+
 /// Rewrite the names this document can be linked by.
-fn refresh_names(conn: &Connection, document: &Document) -> Result<()> {
+pub(crate) fn refresh_names(conn: &Connection, document: &Document) -> Result<()> {
     conn.execute(
         "DELETE FROM document_name WHERE document_id = ?1",
         params![document.id.to_sql_blob()],

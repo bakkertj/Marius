@@ -64,6 +64,17 @@ enum Command {
     /// Drop and rebuild every derived index, keeping all metadata.
     Rebuild,
 
+    /// Replicate a vault against its configured backend: pull, apply,
+    /// push (SYNC-004..011). `MARIUS_SYNC_TOKEN` supplies the bearer
+    /// secret when the server requires one.
+    Sync {
+        /// Vault name. Omit when exactly one vault is open.
+        vault: Option<String>,
+        /// Show conflicted entries instead of syncing.
+        #[arg(long)]
+        status: bool,
+    },
+
     /// Watch a vault and index external changes as they happen (IM-010).
     /// Runs until interrupted.
     Watch {
@@ -203,6 +214,27 @@ enum VaultCommand {
     Detach { name: String },
     /// Mark a detached vault reachable again.
     Attach { name: String },
+    /// Point a vault at a self-hosted sync backend (SYNC-004), or back to
+    /// local-only with `--none`. `marius sync` then replicates.
+    Backend {
+        name: String,
+        /// Base URL, e.g. https://sync.example.net or http://127.0.0.1:8787.
+        url: Option<String>,
+        /// Return the vault to local-only operation.
+        #[arg(long)]
+        none: bool,
+    },
+    /// Join a vault that already lives on a sync backend: creates the
+    /// directory, registers the vault under its *shared* id, and the
+    /// first `marius sync` pulls everything.
+    Join {
+        name: String,
+        path: PathBuf,
+        url: String,
+        /// The vault's id, printed by `marius vault list` on the device
+        /// that created it.
+        vault_id: String,
+    },
     /// Show or set a vault's inference policy.
     Policy {
         name: String,
@@ -337,6 +369,40 @@ fn run(cli: &Cli) -> Result<()> {
             Ok(())
         }
         Command::Watch { vault, debounce } => watch_command(&mut app, vault.as_deref(), *debounce),
+        Command::Sync { vault, status } => {
+            let vault = one_vault(&app, vault.as_deref())?;
+            if *status {
+                let conflicts = app.sync_conflicts()?;
+                if conflicts.is_empty() {
+                    println!("no conflicts");
+                }
+                for op in conflicts {
+                    println!(
+                        "{} {} — {}",
+                        op.entity_kind,
+                        op.entity_id,
+                        op.last_error.as_deref().unwrap_or("conflicted")
+                    );
+                }
+                return Ok(());
+            }
+            let token = std::env::var("MARIUS_SYNC_TOKEN").ok();
+            let report = app.sync_vault(&vault, token.as_deref())?;
+            println!(
+                "{}: pulled {} (applied {}), pushed {}, cursor {}",
+                vault.name, report.pulled, report.applied, report.pushed, report.cursor
+            );
+            for conflict in &report.conflicts {
+                println!("  conflict: {conflict}");
+            }
+            for problem in &report.problems {
+                println!("  problem: {problem}");
+            }
+            if !report.conflicts.is_empty() {
+                println!("resolve by editing the conflicted notes and syncing again; `marius sync --status` lists them");
+            }
+            Ok(())
+        }
         Command::Search {
             query,
             limit,
@@ -625,6 +691,55 @@ fn vault_command(app: &mut Marius, command: &VaultCommand, json: bool) -> Result
             if !json {
                 println!("{} attached", vault.name);
             }
+            Ok(())
+        }
+        VaultCommand::Backend { name, url, none } => {
+            let vault = app.vault(name)?;
+            let backend = match (url, none) {
+                (_, true) => marius_model::SyncBackend::None,
+                (Some(url), false) => marius_model::SyncBackend::SelfHosted {
+                    base_url: url.clone(),
+                },
+                (None, false) => {
+                    println!(
+                        "{}: {} (vault id {})",
+                        vault.name,
+                        match &vault.sync_backend {
+                            marius_model::SyncBackend::SelfHosted { base_url } => base_url.clone(),
+                            other => other.label().to_owned(),
+                        },
+                        vault.id
+                    );
+                    return Ok(());
+                }
+            };
+            app.set_vault_backend(vault.id, backend)?;
+            println!("{} → {}", vault.name, app.vault(name)?.sync_backend.label());
+            Ok(())
+        }
+        VaultCommand::Join {
+            name,
+            path,
+            url,
+            vault_id,
+        } => {
+            let id: marius_model::VaultId = vault_id
+                .parse()
+                .map_err(|e| anyhow::anyhow!("vault id: {e}"))?;
+            let vault = app.join_vault(
+                name,
+                path,
+                id,
+                marius_model::SyncBackend::SelfHosted {
+                    base_url: url.clone(),
+                },
+            )?;
+            println!(
+                "joined {} at {} — `marius sync {}` pulls its content",
+                vault.name,
+                vault.root.display(),
+                vault.name
+            );
             Ok(())
         }
         VaultCommand::Policy {

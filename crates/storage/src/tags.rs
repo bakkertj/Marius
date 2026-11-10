@@ -250,6 +250,19 @@ impl Assigned {
 
 /// Apply one tag assignment, respecting rejections and user ownership.
 pub fn assign(conn: &Connection, assignment: &DocumentTag) -> Result<Assigned> {
+    assign_impl(conn, assignment, true)
+}
+
+/// [`assign`] without the journal entry, for applying *replicated*
+/// assignments: re-journaling what another device just told us would echo
+/// the operation straight back to it. Every gate still applies — a durable
+/// rejection suppresses a synced machine proposal exactly as it suppresses
+/// a reindexed one (integrity rule 7).
+pub fn assign_replica(conn: &Connection, assignment: &DocumentTag) -> Result<Assigned> {
+    assign_impl(conn, assignment, false)
+}
+
+fn assign_impl(conn: &Connection, assignment: &DocumentTag, journal: bool) -> Result<Assigned> {
     let doc = assignment.document.to_sql_blob();
     let tag = assignment.tag.to_sql_blob();
 
@@ -301,15 +314,15 @@ pub fn assign(conn: &Connection, assignment: &DocumentTag) -> Result<Assigned> {
         if protected && !assignment.provenance.is_user_authored() {
             return Ok(Assigned::SkippedProtected);
         }
-        write_assignment(conn, assignment)?;
+        write_assignment(conn, assignment, journal)?;
         return Ok(Assigned::Updated);
     }
 
-    write_assignment(conn, assignment)?;
+    write_assignment(conn, assignment, journal)?;
     Ok(Assigned::Inserted)
 }
 
-fn write_assignment(conn: &Connection, a: &DocumentTag) -> Result<()> {
+fn write_assignment(conn: &Connection, a: &DocumentTag, journal: bool) -> Result<()> {
     conn.execute(
         "INSERT INTO document_tag
             (document_id, tag_id, provenance, review, source, confidence, model, assigned_at)
@@ -332,7 +345,9 @@ fn write_assignment(conn: &Connection, a: &DocumentTag) -> Result<()> {
             time_to_sql(a.assigned_at),
         ],
     )?;
-    journal_assignment(conn, a.document, a.tag, ChangeKind::Upsert)?;
+    if journal {
+        journal_assignment(conn, a.document, a.tag, ChangeKind::Upsert)?;
+    }
     Ok(())
 }
 

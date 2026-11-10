@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **118 done, 21 partial, 21 ready, 34 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **125 done, 23 partial, 14 ready, 32 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -183,16 +183,16 @@ Totals of 194 requirement IDs: **118 done, 21 partial, 21 ready, 34 open**. Ever
 | SYNC-001 | done | everything | `ac_017_everything_essential_works_with_no_network` |
 | SYNC-002 | done | `Database`, device-local `vault.root` | `a_device_identity_is_created_once` |
 | SYNC-003 | open | — | CloudKit adapter; phase 5. |
-| SYNC-004 | open | `apps/sync-server` | Phase 5. |
-| SYNC-005 | ready | `changelog`, `EntityKind` | Every entity kind journalled. |
-| SYNC-006 | ready | `changelog::outstanding` | Queue exists; no transport. |
-| SYNC-007 | ready | `SyncBackend`, journal `backend` column | One backend per vault. |
-| SYNC-008 | ready | journal records its backend | `the_journal_records_the_backend_a_vault_syncs_to` |
-| SYNC-009 | ready | `SyncOperation::conflicts_with` | `concurrent_edits_to_one_document_are_a_conflict` |
+| SYNC-004 | partial | `marius-sync-service`, `apps/sync-server`, `sync_client` | Working self-hosted backend, live-verified; SQLite store today, PostgreSQL behind the same tested API remains. |
+| SYNC-005 | done | `SyncPayload`, `sync_client` | Documents+content, tags, assignments, relationships, rejections travel; derived rows re-derive locally (decision 6). |
+| SYNC-006 | done | cursor + pull/apply/push | `an_edit_travels_back_and_forward_without_echo` |
+| SYNC-007 | done | `SyncBackend`, `marius vault backend` | One authority per vault, switchable. |
+| SYNC-008 | partial | cursor keyed by backend; bootstrap push | Switching re-bootstraps to the new backend; CloudKit side absent. |
+| SYNC-009 | done | server heads + client Conflicted state | `concurrent_edits_conflict_and_neither_side_is_discarded` |
 | SYNC-010 | done | `LogicalTimestamp`, tombstones, revisions | `the_clock_survives_a_reopen` + 5 |
-| SYNC-011 | ready | `SyncState`, `counts_by_state`, `last_error` | `pruning_keeps_everything_still_unresolved` |
+| SYNC-011 | done | `SyncReport`, `marius sync --status` | Counts, conflicts, problems, cursor on every run. |
 | SYNC-012 | done | no FK on edge endpoints | `cross_vault_edges_survive_their_far_vault_becoming_unavailable` |
-| SYNC-013 | open | — | Needs the transport. |
+| SYNC-013 | done | bearer token + `require_transport_security` | `plain_http_to_a_remote_host_is_refused`; TLS via reverse proxy, documented. |
 | SYNC-014 | done | design constraint | SQLite is never the sync unit; the journal is. |
 | SYNC-015 | open | — | P2. |
 
@@ -273,7 +273,7 @@ Totals of 194 requirement IDs: **118 done, 21 partial, 21 ready, 34 open**. Ever
 | AC-009 | done | `ac_009_cross_vault_links_and_global_search` |
 | AC-010 | ready | `a_user_edited_note_is_never_regenerated_in_place` (rule tested; no generator) |
 | AC-011 | done | `ac_011_a_pasted_email_becomes_ordinary_knowledge` |
-| AC-012 | ready | `concurrent_edits_to_one_document_are_a_conflict` (detection tested; no transport) |
+| AC-012 | done | `concurrent_edits_conflict_and_neither_side_is_discarded` — offline edits on two devices, conflict surfaced, nothing lost. |
 | AC-013 | open | Needs CloudKit. |
 | AC-014 | open | Needs both backends. |
 | AC-015 | open | Needs the plugin runtime. |

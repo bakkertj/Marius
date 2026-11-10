@@ -34,18 +34,25 @@ pub struct Migration {
 }
 
 /// The schema's current version.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 
 /// Tables holding data that can be recomputed from source files and durable
 /// metadata. `rebuild_indexes` truncates exactly these (NFR-007).
 pub const DERIVED_TABLES: &[&str] = &["document_fts", "chunk_embedding", "chunk"];
 
 /// All migrations, oldest first.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial",
-    sql: INITIAL,
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial",
+        sql: INITIAL,
+    },
+    Migration {
+        version: 2,
+        name: "sync cursor",
+        sql: SYNC_CURSOR,
+    },
+];
 
 const INITIAL: &str = r#"
 -- ---------------------------------------------------------------- vaults
@@ -368,6 +375,17 @@ CREATE TABLE saved_search (
     name       TEXT PRIMARY KEY,
     query      TEXT NOT NULL,
     created_at TEXT NOT NULL
+) STRICT;
+"#;
+
+/// v2 — where each vault's pull left off against its backend (SYNC-006).
+/// One row per vault; the sequence is the *server's* numbering, so a
+/// backend migration (SYNC-008) resets the row rather than reinterpreting it.
+const SYNC_CURSOR: &str = r#"
+CREATE TABLE sync_cursor (
+    vault_id  BLOB PRIMARY KEY,
+    backend   TEXT NOT NULL,
+    last_seq  INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 "#;
 

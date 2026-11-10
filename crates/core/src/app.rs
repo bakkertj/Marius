@@ -98,8 +98,8 @@ fn check_portable(path: &VaultPath) -> Result<()> {
 
 /// An open Marius installation.
 pub struct Marius {
-    db: Database,
-    config: Config,
+    pub(crate) db: Database,
+    pub(crate) config: Config,
     data_dir: PathBuf,
 }
 
@@ -340,7 +340,7 @@ impl Marius {
         Ok(reports)
     }
 
-    fn index_options(&self, vault: &Vault) -> Result<IndexOptions> {
+    pub(crate) fn index_options(&self, vault: &Vault) -> Result<IndexOptions> {
         let link_vaults = if self.config.cross_vault_links {
             self.vaults()?
                 .into_iter()
@@ -1864,7 +1864,7 @@ impl Marius {
         })
     }
 
-    fn vault_by_id(&self, id: VaultId) -> Result<Vault> {
+    pub(crate) fn vault_by_id(&self, id: VaultId) -> Result<Vault> {
         marius_storage::vaults::get(self.db.conn(), id)?
             .map(|(vault, _)| vault)
             .ok_or_else(|| CoreError::NoSuchVault(id.to_string()))

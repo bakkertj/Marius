@@ -411,3 +411,93 @@ mod tests {
         }
     }
 }
+
+// ------------------------------------------------------------- protocol
+
+/// The full state an operation carries across the wire (SYNC-005).
+///
+/// Upserts replicate complete entities — that is what makes at-least-once
+/// delivery idempotent (SYNC-010) — and deletes are tombstones carrying
+/// nothing. Derived data (links, search index, computed kinship) is never
+/// in a payload: each device re-derives it from the replicated sources,
+/// which decision 6 already requires for rebuildability.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum SyncPayload {
+    Document {
+        document: crate::Document,
+        /// The Markdown body. `None` for attachments, whose bytes travel
+        /// by other means (SYNC-015's remote attachment storage, later).
+        content: Option<String>,
+    },
+    Tag {
+        tag: crate::Tag,
+    },
+    DocumentTag {
+        assignment: crate::DocumentTag,
+        /// The tag's name rides along so a device that has not yet seen
+        /// the tag row can still apply the assignment in order.
+        tag_name: crate::TagName,
+    },
+    RejectedTag {
+        document: crate::DocumentId,
+        tag: crate::TagId,
+        tag_name: crate::TagName,
+        reason: Option<String>,
+    },
+    Relationship {
+        relationship: crate::Relationship,
+    },
+    RejectedRelationship {
+        rejection: crate::RejectedRelationship,
+    },
+    /// A deletion: the operation's entity id names what died (SYNC-010).
+    Tombstone,
+    /// An entity kind this build does not replicate. Carried, stored and
+    /// returned verbatim so an older client never destroys a newer one's
+    /// data — it just passes it along.
+    Opaque {
+        json: String,
+    },
+}
+
+/// One operation plus its payload: the unit of replication.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SyncEnvelope {
+    pub op: SyncOperation,
+    pub payload: SyncPayload,
+}
+
+/// `POST /v1/vaults/:vault/push`
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PushRequest {
+    pub device: DeviceId,
+    pub ops: Vec<SyncEnvelope>,
+}
+
+/// Why one pushed operation was not accepted.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PushConflict {
+    pub op: OperationId,
+    /// The operation the server already holds for this entity — the other
+    /// side of the conflict, so the client can show both (SYNC-009).
+    pub theirs: SyncEnvelope,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PushResponse {
+    /// Accepted (or already known — idempotent) operation ids.
+    pub accepted: Vec<OperationId>,
+    pub conflicts: Vec<PushConflict>,
+}
+
+/// `GET /v1/vaults/:vault/pull?after=<seq>&device=<id>`
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PullResponse {
+    /// Operations after the requested cursor, oldest first, each with the
+    /// server sequence the client stores as its next cursor.
+    pub ops: Vec<(u64, SyncEnvelope)>,
+    /// The server's current head; equal to the last entry's sequence when
+    /// `ops` is non-empty.
+    pub head: u64,
+}

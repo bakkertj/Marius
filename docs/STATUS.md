@@ -4,7 +4,7 @@ What works today, what is designed but not built, and what is next. Precise
 per-requirement status is in [TRACEABILITY.md](TRACEABILITY.md), which is
 checked against the specification on every `cargo test`.
 
-**As of this writing: 643 tests (566 core + 77 UI), zero clippy warnings, formatted.**
+**As of this writing: 672 tests (595 core + 77 UI), zero clippy warnings, formatted.**
 
 ## Platform position
 
@@ -148,6 +148,21 @@ line.
   skipped, not sent) and the strictest retrieved source governs a question
   (AI-008). The protocol is proven over real loopback sockets; a live
   quality run awaits a real instruct/embedding model in the local daemon.
+- **Self-hosted sync** — `marius-sync-server` (one binary, one SQLite
+  file, a bearer token) plus `marius vault backend`, `marius vault join`
+  and `marius sync`. Documents with their content, tags, assignments,
+  review states, relationships and rejections replicate; derived rows
+  (links, inline-tag assignments, search index) are re-derived on each
+  device, so a synced vault needs no index shipping. Pull first, then
+  push; at-least-once and idempotent by operation id; per-entity revision
+  heads detect concurrent edits, which are surfaced and never resolved by
+  discarding a side — the later writer's journal entry goes `Conflicted`
+  with both halves described. A rejection made on one device suppresses
+  machine proposals on every other. Deletions travel as tombstones and
+  land in the receiving device's trash. Plain HTTP beyond the loopback is
+  refused (SYNC-013); run the server behind a TLS proxy. Proven by
+  two-device round-trip tests over real HTTP and verified live with two
+  CLI data directories against the production binary.
 
 ## Designed and stored for, but not built
 
