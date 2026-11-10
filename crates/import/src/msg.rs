@@ -76,7 +76,7 @@ pub fn import_msg(raw: &[u8]) -> Result<ImportedNote, ImportError> {
     // Prefer PR_HTML (binary) converted to Markdown, like .eml import;
     // fall back to the plain-text body. Headers alone still import.
     let body_markdown = match stream_bytes(&mut file, "/__substg1.0_10130102") {
-        Some(html) => crate::html_to_markdown(&String::from_utf8_lossy(&html))
+        Some(html) => crate::html_to_markdown(&crate::html::decode(&html))
             .map_err(|e| ImportError::Html(e.to_string()))?
             .trim()
             .to_owned(),

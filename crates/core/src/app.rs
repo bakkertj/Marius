@@ -2446,7 +2446,9 @@ impl Marius {
                 });
             }
             "html" | "htm" => {
-                let html = String::from_utf8_lossy(&bytes);
+                // Outlook's save-as-htm is Windows-1252 or UTF-16, not
+                // UTF-8 — decode by what the file actually is (IM-008).
+                let html = marius_import::html::decode(&bytes);
                 notes.push(
                     marius_import::html::import(&html, &stem, Some(&source.display().to_string()))
                         .map_err(|e| CoreError::Inference(e.to_string()))?,

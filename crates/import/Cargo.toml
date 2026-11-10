@@ -11,6 +11,7 @@ description = "Importers: HTML, .eml and .mbox into Markdown notes"
 marius-model = { workspace = true }
 htmd = { workspace = true }
 cfb = { workspace = true }
+encoding_rs = { workspace = true }
 mail-parser = { workspace = true }
 pdf-extract = { workspace = true }
 zip = { workspace = true }

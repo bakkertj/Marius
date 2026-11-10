@@ -1609,6 +1609,7 @@ name = "marius-import"
 version = "0.1.0"
 dependencies = [
  "cfb",
+ "encoding_rs",
  "htmd",
  "mail-parser",
  "marius-model",
