@@ -50,17 +50,15 @@ pub fn tagging_request(
     let body_excerpt = truncate_on_char_boundary(body, BODY_BUDGET);
     let system = format!(
         "You tag personal notes so their author can find them again. Reply \
-         with ONLY a JSON array of lowercase tag strings, most relevant \
-         first, at most {max_tags}. Use '/' for hierarchy (e.g. \
-         \"vendor/cisco\"). Prefer the specific, searchable names in the \
-         note over broad topics: exact product names and part numbers (e.g. \
-         \"cisco-c9200l-48p-4x-e\"), program and project names, vendors, \
-         protocols, standards, people's organisations, places — the words \
-         the author would type into search. Add at most two broader topic \
-         tags after the specific ones. Always tag the proper names the note \
-         is about — the program, project or system it concerns — even when \
-         they appear only once. Reuse the vault's existing tags when they \
-         genuinely fit; never force one. No commentary."
+         with ONLY a JSON object with two keys. \"names\": every proper \
+         name the note mentions — products and part numbers (e.g. \
+         \"cisco-c9200l-48p-4x-e\"), program and project names, systems, \
+         vendors, protocols, standards, organisations, places. \"tags\": \
+         at most {max_tags} lowercase tag strings, most relevant first, \
+         built from those names first — the words the author would type \
+         into search — then at most two broader topic tags. Use '/' for \
+         hierarchy (e.g. \"vendor/cisco\"). Reuse the vault's existing \
+         tags when they genuinely fit; never force one. No commentary."
     );
     let mut user = if vocab.is_empty() {
         format!("Title: {title}\n\n{body_excerpt}")
@@ -136,7 +134,8 @@ pub fn parse_suggestions(reply: &str, max: usize) -> Vec<TagSuggestion> {
 /// A tag is a label, not a sentence. Models that ignore instructions
 /// produce prose fragments, and normalisation dutifully hyphenates them
 /// into "valid" names — so validity is not enough. Each hierarchy level
-/// may carry at most three *words*, and the whole name stays short.
+/// may carry at most four *words* (program names run long), and the
+/// whole name stays short.
 ///
 /// Only alphabetic segments count as words: a part number like
 /// "cisco-c9200l-48p-4x-e" is five segments but no sentence, and part
@@ -151,7 +150,7 @@ fn looks_like_a_tag(name: &TagName) -> bool {
                     .split('-')
                     .filter(|segment| segment.chars().all(char::is_alphabetic))
                     .count()
-                    <= 3
+                    <= 4
         })
 }
 
@@ -290,6 +289,22 @@ mod tests {
         assert_eq!(
             names(&got),
             ["maritime-history", "history/ottoman-empire", "lighthouse"]
+        );
+    }
+
+    #[test]
+    fn the_names_then_tags_object_reply_is_parsed() {
+        // The prompt asks for {"names": [...], "tags": [...]} — naming
+        // first is what makes models actually surface part numbers and
+        // program names. Only "tags" is the answer.
+        let got = parse_suggestions(
+            r#"{"names": ["Cisco C9200L-48P-4X-E", "Project Beacon"],
+                "tags": ["cisco-c9200l-48p-4x-e", "project-beacon", "networking"]}"#,
+            8,
+        );
+        assert_eq!(
+            names(&got),
+            ["cisco-c9200l-48p-4x-e", "project-beacon", "networking"]
         );
     }
 
