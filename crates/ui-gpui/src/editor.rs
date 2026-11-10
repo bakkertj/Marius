@@ -44,6 +44,7 @@ actions!(
         DeleteWordBack,
         Enter,
         Tab,
+        ShiftTab,
         MoveLeft,
         MoveRight,
         MoveUp,
@@ -84,6 +85,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("alt-backspace", DeleteWordBack, CTX),
         KeyBinding::new("enter", Enter, CTX),
         KeyBinding::new("tab", Tab, CTX),
+        KeyBinding::new("shift-tab", ShiftTab, CTX),
         KeyBinding::new("left", MoveLeft, CTX),
         KeyBinding::new("right", MoveRight, CTX),
         KeyBinding::new("up", MoveUp, CTX),
@@ -455,9 +457,20 @@ impl Editor {
     }
 
     fn on_tab(&mut self, _: &Tab, _: &mut Window, cx: &mut Context<Self>) {
-        // Two spaces: the Markdown list-indent unit.
+        // In a table row, Tab walks the cells (MD-013); elsewhere it is
+        // two spaces, the Markdown list-indent unit.
+        if self.buffer.table_next_cell() {
+            self.edited(cx);
+            return;
+        }
         self.buffer.insert("  ");
         self.edited(cx);
+    }
+
+    fn on_shift_tab(&mut self, _: &ShiftTab, _: &mut Window, cx: &mut Context<Self>) {
+        if self.buffer.table_previous_cell() {
+            cx.notify();
+        }
     }
 
     fn on_select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -736,6 +749,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_delete_word))
             .on_action(cx.listener(Self::on_enter))
             .on_action(cx.listener(Self::on_tab))
+            .on_action(cx.listener(Self::on_shift_tab))
             .on_action(cx.listener(Self::on_select_all))
             .on_action(cx.listener(Self::on_undo))
             .on_action(cx.listener(Self::on_redo))

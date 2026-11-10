@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **143 done, 20 partial, 7 ready, 24 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **144 done, 20 partial, 7 ready, 23 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -72,7 +72,7 @@ Totals of 194 requirement IDs: **143 done, 20 partial, 7 ready, 24 open**. Every
 | MD-010 | partial | `ENABLE_MATH`, `Block::Math`, mermaid-labelled code | Math parses and renders distinctly (badged, sideways-scrolling, not yet typeset); Mermaid shows as labelled source. True typesetting/diagramming remain. |
 | MD-011 | done | templates, dailies, outline, split panes, tabs | `md_011_daily_notes_and_templates`; tabs land with UI-006. |
 | MD-012 | done | `Block::Callout`, GFM alerts + Obsidian markers | `an_obsidian_callout_becomes_a_typed_block_with_title`; kinds map onto the WCAG-checked palette. |
-| MD-013 | open | — | Needs the UI. |
+| MD-013 | done | `Buffer::table_next_cell/previous_cell`, Enter continuation | Tab/⇧Tab walk cells (growing the row in the last), Enter continues the table, an empty row ends it — `table_tests`. |
 | MD-014 | open | — | P2. |
 
 ## 3.3 Import and capture

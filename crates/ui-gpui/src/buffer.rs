@@ -289,6 +289,34 @@ impl Buffer {
         let line_text = self.text[line.clone()].to_owned();
         let marker = list_marker(&line_text);
 
+        // A table row continues with an empty row of the same shape; a
+        // row already empty ends the table (MD-013), mirroring lists.
+        if line_text.trim_start().starts_with('|')
+            && self.selection().is_empty()
+            && self.cursor == line.end
+        {
+            let cells = line_text.matches('|').count().saturating_sub(1);
+            let empty_row = format!("|{}", "  |".repeat(cells.max(1)));
+            if line_text
+                .replace(['|', ' ', '-', ':'], "")
+                .trim()
+                .is_empty()
+                && !line_text.contains('-')
+            {
+                // The row has no content: end the table.
+                let range = line.start..self.selection().end;
+                self.apply(range, "\n", Coalesce::No);
+            } else {
+                let range = self.selection();
+                self.apply(range, &format!("\n{empty_row}"), Coalesce::No);
+                // Land inside the first cell of the fresh row.
+                let line = self.line_range(self.cursor);
+                self.set_cursor((line.start + 2).min(line.end), false);
+            }
+            self.last_edit = LastEdit::Other;
+            return;
+        }
+
         match marker {
             Some(marker) if line_text.trim_end() == marker.trim_end() => {
                 // Return on an empty item ends the list: remove the marker.
@@ -306,6 +334,73 @@ impl Buffer {
             }
         }
         self.last_edit = LastEdit::Other;
+    }
+
+    /// True when the cursor's line is a pipe-table row.
+    fn on_table_row(&self) -> bool {
+        let line = self.line_range(self.cursor);
+        self.text[line].trim_start().starts_with('|')
+    }
+
+    /// Tab inside a table row: hop to the next cell, appending one when
+    /// the cursor sits in the last (MD-013). Returns false off-table so
+    /// the caller can fall back to ordinary indentation.
+    pub fn table_next_cell(&mut self) -> bool {
+        if !self.on_table_row() || self.has_selection() {
+            return false;
+        }
+        let line = self.line_range(self.cursor);
+        let after = &self.text[self.cursor..line.end];
+        // The next bar opens the next cell — unless nothing but
+        // whitespace follows it, in which case it is the row's
+        // terminator and the cursor sits in the last cell.
+        let next_cell = after.find('|').and_then(|bar| {
+            let bar_abs = self.cursor + bar;
+            let tail = &self.text[bar_abs + 1..line.end];
+            (!tail.trim().is_empty()).then_some(bar_abs)
+        });
+        match next_cell {
+            Some(bar_abs) => {
+                let mut target = bar_abs + 1;
+                if self.text[target..line.end].starts_with(' ') {
+                    target += 1;
+                }
+                self.set_cursor(target, false);
+            }
+            None => {
+                // Last cell: grow the row by one empty cell and land in it.
+                let end = line.end;
+                self.apply(end..end, " |", Coalesce::No);
+                self.set_cursor(end + 1, false);
+            }
+        }
+        true
+    }
+
+    /// Shift-Tab inside a table row: hop to the previous cell.
+    pub fn table_previous_cell(&mut self) -> bool {
+        if !self.on_table_row() || self.has_selection() {
+            return false;
+        }
+        let line = self.line_range(self.cursor);
+        let before = &self.text[line.start..self.cursor];
+        // Skip the bar that opens the CURRENT cell, then find the one
+        // before it.
+        let mut bars: Vec<usize> = before
+            .char_indices()
+            .filter(|(_, c)| *c == '|')
+            .map(|(i, _)| line.start + i)
+            .collect();
+        bars.pop(); // the current cell's opening bar
+        let Some(previous) = bars.pop() else {
+            return true; // first cell: stay put, still handled
+        };
+        let mut target = previous + 1;
+        if self.text[target..].starts_with(' ') {
+            target += 1;
+        }
+        self.set_cursor(target, false);
+        true
     }
 
     /// Delete the selection, or one grapheme backwards.
@@ -968,5 +1063,59 @@ mod tests {
         // oldest, not the newest, is what a capped history means.
         assert!(b.text().starts_with(" 0 1 2"), "{:?}", &b.text()[..20]);
         assert!(!b.text().contains(" 1100"));
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::*;
+
+    #[test]
+    fn tab_walks_cells_and_grows_the_row_at_the_end() {
+        // MD-013: Tab hops cell to cell; in the last cell it appends one.
+        let mut b = Buffer::new("| a | b |\n");
+        b.set_cursor(2, false); // inside "a"
+        assert!(b.table_next_cell());
+        assert_eq!(b.cursor(), 6, "{:?}", &b.text()[..b.cursor()]); // at "b"
+        assert!(b.table_next_cell());
+        // Was the last cell: the row grew by one empty cell.
+        assert!(b.text().starts_with("| a | b | |"), "{:?}", b.text());
+        assert_eq!(b.cursor(), 10, "inside the fresh cell");
+
+        // Off-table, Tab means indentation, not navigation.
+        let mut b = Buffer::new("plain text\n");
+        b.set_cursor(3, false);
+        assert!(!b.table_next_cell());
+    }
+
+    #[test]
+    fn shift_tab_walks_backwards_and_stops_at_the_first_cell() {
+        let mut b = Buffer::new("| alpha | beta |\n");
+        b.set_cursor(11, false); // inside "beta"
+        assert!(b.table_previous_cell());
+        assert_eq!(&b.text()[b.cursor()..b.cursor() + 5], "alpha");
+        assert!(b.table_previous_cell(), "first cell still handled");
+        assert_eq!(&b.text()[b.cursor()..b.cursor() + 5], "alpha", "stays");
+    }
+
+    #[test]
+    fn enter_continues_a_table_and_an_empty_row_ends_it() {
+        let mut b = Buffer::new("| a | b |");
+        b.set_cursor(9, false);
+        b.insert_newline();
+        assert_eq!(b.text(), "| a | b |\n|  |  |");
+        // The cursor landed inside the fresh first cell.
+        assert_eq!(b.cursor(), 12);
+
+        // Enter on the empty row ends the table.
+        let line_end = b.text().len();
+        b.set_cursor(line_end, false);
+        b.insert_newline();
+        assert!(b.text().ends_with('\n'), "{:?}", b.text());
+        assert!(
+            !b.text().contains("|  |  |"),
+            "empty row removed: {:?}",
+            b.text()
+        );
     }
 }

@@ -75,6 +75,10 @@ every platform, since the file is created on the Mac. Three behaviours:
   drawable (GRAPH-014). Assembly (`core::graph`) and the deterministic
   force simulation (`ui-gpui/graph.rs`) are headlessly tested; the canvas
   is the thin part.
+- **Table editing (MD-013)**: inside a pipe-table row, Tab hops to the
+  next cell (growing the row from the last), ⇧Tab hops back, Enter
+  continues the table with an empty row, and Enter on an empty row ends
+  it — the same grammar lists already speak.
 - **Tabs and a saved workspace**: ⌘⇧T opens a tab (each with its own
   live buffer — switching never drops unsaved work), ⌘W closes (saving
   first; the last tab empties instead), ⌃Tab cycles; the strip shows
