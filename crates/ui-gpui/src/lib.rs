@@ -3,6 +3,7 @@ pub mod editor;
 pub mod graph;
 pub mod graph_view;
 pub mod highlight;
+pub mod palette;
 pub mod preview;
 pub mod theme;
 pub mod tree;

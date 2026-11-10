@@ -43,7 +43,8 @@ actions!(
         SuggestTags,
         ZoomIn,
         ZoomOut,
-        ZoomReset
+        ZoomReset,
+        OpenPalette
     ]
 );
 
@@ -78,9 +79,39 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-+")), ZoomIn, None),
         KeyBinding::new(key(format!("{primary}--")), ZoomOut, None),
         KeyBinding::new(key(format!("{primary}-0")), ZoomReset, None),
+        // The command palette (UI-006): every action, one keystroke away.
+        KeyBinding::new(key(format!("{primary}-shift-p")), OpenPalette, None),
         // The knowledge graph (GRAPH-001).
         KeyBinding::new(key(format!("{primary}-g")), ToggleGraph, None),
     ]
+}
+
+/// One palette entry: a label and what running it means.
+#[derive(Clone)]
+struct PaletteItem {
+    label: SharedString,
+    action: PaletteAction,
+}
+
+#[derive(Clone)]
+enum PaletteAction {
+    NewNote,
+    Reindex,
+    ToggleReading,
+    ToggleSplit,
+    ToggleGraph,
+    SuggestTags,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    ToggleAppearance,
+    Save,
+    /// A command an enabled plugin registered (PLUG-010), run on a
+    /// worker thread with its own connection.
+    Plugin {
+        plugin: String,
+        command: String,
+    },
 }
 
 /// One row in the result list.
@@ -253,16 +284,22 @@ pub struct Workspace {
     /// Provenance banner for a generated note (AI-011): who made it,
     /// from what, and whether a person has edited it since.
     open_provenance: Option<marius_model::GeneratedNoteProvenance>,
-    /// A tag-suggestion run on its worker thread (⌘T). The worker opens
-    /// its own connection — WAL serves both — because an LLM call must
-    /// never freeze the interface.
-    suggestion: Option<std::sync::mpsc::Receiver<std::result::Result<Vec<String>, String>>>,
+    /// A background run (⌘T suggestions, a palette plugin command) on
+    /// its worker thread with its own connection — WAL serves both —
+    /// because neither an LLM nor a plugin may freeze the interface.
+    /// The payload is the finished status line.
+    suggestion: Option<std::sync::mpsc::Receiver<std::result::Result<String, String>>>,
     /// A semantic/hybrid search on its worker thread (`?`/`??` + Enter):
     /// the query embedding is a model call, so it never runs live.
     semantic: Option<std::sync::mpsc::Receiver<std::result::Result<Vec<Row>, String>>>,
-    /// Content font scale (⌃⇧+/− / ⌃⇧0). Applies to the editor, the
+    /// Content font scale (⌘+/⌘−/⌘0). Applies to the editor, the
     /// preview and the split; the chrome stays put.
     zoom: f32,
+    /// The command palette (UI-006): its input, what it offers, and the
+    /// current filtered selection. `None` items = closed.
+    palette_input: Entity<Editor>,
+    palette_items: Option<Vec<PaletteItem>>,
+    palette_selected: usize,
     /// Debounced filesystem watcher (IM-010); `None` when the platform
     /// refused one, in which case ⌘R stays the manual fallback.
     watcher: Option<VaultWatcher>,
@@ -286,6 +323,7 @@ impl Workspace {
         let editor = cx.new(|cx| Editor::new(cx, theme, resolver));
         let search =
             cx.new(|cx| Editor::single_line(cx, theme, "Search… (⌘K) · ?semantic · ??hybrid"));
+        let palette_input = cx.new(|cx| Editor::single_line(cx, theme, "Type a command…"));
         let preview_base = Rc::new(VaultPreviewContext {
             app: app.clone(),
             vault: vault.id,
@@ -301,6 +339,8 @@ impl Workspace {
             .detach();
 
         cx.subscribe_in(&search, window, Self::on_search_event)
+            .detach();
+        cx.subscribe_in(&palette_input, window, Self::on_palette_event)
             .detach();
         cx.subscribe_in(&editor, window, Self::on_editor_event)
             .detach();
@@ -355,6 +395,9 @@ impl Workspace {
             suggestion: None,
             semantic: None,
             zoom: 1.0,
+            palette_input,
+            palette_items: None,
+            palette_selected: 0,
             watcher,
             focus_handle: cx.focus_handle(),
         };
@@ -708,19 +751,16 @@ impl Workspace {
             return;
         };
         match receiver.try_recv() {
-            Ok(Ok(applied)) => {
-                self.status = if applied.is_empty() {
-                    "the model proposed nothing new".into()
-                } else {
-                    format!("proposed: {} — review with ✓/✗ above", applied.join(", ")).into()
-                };
+            Ok(Ok(line)) => {
+                self.status = line.into();
                 self.suggestion = None;
                 self.refresh_open_tags();
                 self.refresh_tags();
+                self.rebuild_tree(cx);
                 cx.notify();
             }
             Ok(Err(reason)) => {
-                self.status = format!("no suggestions: {reason}").into();
+                self.status = reason.into();
                 self.suggestion = None;
                 cx.notify();
             }
@@ -978,6 +1018,165 @@ impl Workspace {
         cx.notify();
     }
 
+    /// ⌘⇧P: open the palette with everything runnable right now —
+    /// built-in actions plus every enabled plugin's commands (UI-006).
+    fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut items = vec![
+            ("New note", PaletteAction::NewNote),
+            ("Save document", PaletteAction::Save),
+            ("Suggest tags for this note", PaletteAction::SuggestTags),
+            ("Toggle reading view", PaletteAction::ToggleReading),
+            ("Toggle split preview", PaletteAction::ToggleSplit),
+            ("Toggle knowledge graph", PaletteAction::ToggleGraph),
+            ("Reindex vault", PaletteAction::Reindex),
+            ("Zoom in", PaletteAction::ZoomIn),
+            ("Zoom out", PaletteAction::ZoomOut),
+            ("Zoom: reset", PaletteAction::ZoomReset),
+            ("Toggle light/dark", PaletteAction::ToggleAppearance),
+        ]
+        .into_iter()
+        .map(|(label, action)| PaletteItem {
+            label: label.into(),
+            action,
+        })
+        .collect::<Vec<_>>();
+
+        // Plugin commands: enabled plugins only, loaded without
+        // capabilities — enumeration must not grant anything.
+        let plugins = self.app.borrow().plugins().unwrap_or_default();
+        for installation in plugins.into_iter().filter(|p| p.enabled) {
+            let commands =
+                marius_core::plugins::plugin_commands(self.app.clone(), &installation.manifest.id)
+                    .unwrap_or_default();
+            for command in commands {
+                items.push(PaletteItem {
+                    label: format!("{}: {command}", installation.manifest.name).into(),
+                    action: PaletteAction::Plugin {
+                        plugin: installation.manifest.id.clone(),
+                        command,
+                    },
+                });
+            }
+        }
+
+        self.palette_items = Some(items);
+        self.palette_selected = 0;
+        self.palette_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        window.focus(&self.palette_input.read(cx).focus_handle(cx));
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette_items = None;
+        let handle = self.editor.read(cx).focus_handle(cx);
+        window.focus(&handle);
+        cx.notify();
+    }
+
+    fn palette_matches(&self, cx: &Context<Self>) -> Vec<PaletteItem> {
+        let Some(items) = &self.palette_items else {
+            return Vec::new();
+        };
+        let query = self.palette_input.read(cx).text().trim().to_owned();
+        crate::palette::rank(&query, items, |item| item.label.as_ref())
+            .into_iter()
+            .map(|(_, item)| item.clone())
+            .take(12)
+            .collect()
+    }
+
+    fn on_palette_event(
+        &mut self,
+        _: &Entity<Editor>,
+        event: &EditorEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            EditorEvent::Edited => {
+                self.palette_selected = 0;
+                cx.notify();
+            }
+            EditorEvent::Cancelled => self.close_palette(window, cx),
+            EditorEvent::NavigateDown => {
+                let count = self.palette_matches(cx).len();
+                if count > 0 {
+                    self.palette_selected = (self.palette_selected + 1).min(count - 1);
+                }
+                cx.notify();
+            }
+            EditorEvent::NavigateUp => {
+                self.palette_selected = self.palette_selected.saturating_sub(1);
+                cx.notify();
+            }
+            EditorEvent::Submitted => {
+                let matches = self.palette_matches(cx);
+                if let Some(item) = matches.get(self.palette_selected).cloned() {
+                    self.close_palette(window, cx);
+                    self.run_palette_action(item.action, window, cx);
+                } else {
+                    self.close_palette(window, cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn run_palette_action(
+        &mut self,
+        action: PaletteAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            PaletteAction::NewNote => self.new_note(window, cx),
+            PaletteAction::Save => self.autosave(cx),
+            PaletteAction::SuggestTags => self.suggest_tags(cx),
+            PaletteAction::ToggleReading => self.on_toggle_reading(&ToggleReading, window, cx),
+            PaletteAction::ToggleSplit => self.on_toggle_split(&ToggleSplit, window, cx),
+            PaletteAction::ToggleGraph => self.on_toggle_graph(&ToggleGraph, window, cx),
+            PaletteAction::Reindex => self.reindex(cx),
+            PaletteAction::ZoomIn => self.set_zoom(self.zoom + 0.1, cx),
+            PaletteAction::ZoomOut => self.set_zoom(self.zoom - 0.1, cx),
+            PaletteAction::ZoomReset => self.set_zoom(1.0, cx),
+            PaletteAction::ToggleAppearance => {
+                self.on_toggle_appearance(&ToggleAppearance, window, cx)
+            }
+            PaletteAction::Plugin { plugin, command } => {
+                // A plugin command may block on anything: its own thread,
+                // its own connection; its log lands in the status line via
+                // the poll timer, and file changes arrive via the watcher.
+                let data_dir = self.app.borrow().data_dir().to_path_buf();
+                let vault = self.vault.id;
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let label = format!("{plugin}: {command}");
+                std::thread::spawn(move || {
+                    let result = (|| -> std::result::Result<String, String> {
+                        let app = Marius::open(&data_dir).map_err(|e| e.to_string())?;
+                        let shared = std::rc::Rc::new(std::cell::RefCell::new(app));
+                        let (output, mut log) = marius_core::plugins::run_plugin_command(
+                            shared, vault, &plugin, &command,
+                        )
+                        .map_err(|e| e.to_string())?;
+                        if !output.is_empty() {
+                            log.push(output);
+                        }
+                        Ok(if log.is_empty() {
+                            format!("{command} finished")
+                        } else {
+                            log.join(" · ")
+                        })
+                    })();
+                    let _ = sender.send(result);
+                });
+                self.suggestion = Some(receiver);
+                self.status = format!("running {label}…").into();
+                cx.notify();
+            }
+        }
+    }
+
     fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
         let zoom = (zoom * 10.0).round() / 10.0;
         self.zoom = zoom.clamp(0.6, 2.4);
@@ -1013,17 +1212,18 @@ impl Workspace {
         let data_dir = self.app.borrow().data_dir().to_path_buf();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let result = (|| -> std::result::Result<Vec<String>, String> {
+            let result = (|| -> std::result::Result<String, String> {
                 let mut app = Marius::open(&data_dir).map_err(|e| e.to_string())?;
                 let result = app.suggest_tags(id, true).map_err(|e| e.to_string())?;
                 if result.suggestions.is_empty() {
                     return Err(result.reason);
                 }
-                Ok(result
-                    .applied
-                    .iter()
-                    .map(|t| t.as_str().to_owned())
-                    .collect())
+                let applied: Vec<&str> = result.applied.iter().map(|t| t.as_str()).collect();
+                Ok(if applied.is_empty() {
+                    "the model proposed nothing new".to_owned()
+                } else {
+                    format!("proposed: {} — review with ✓/✗ above", applied.join(", "))
+                })
             })();
             let _ = sender.send(result);
         });
@@ -1568,6 +1768,78 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The palette overlay (UI-006), when open: input on top, ranked
+    /// matches below, Enter or click to run, Escape to dismiss.
+    fn render_palette(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        self.palette_items.as_ref()?;
+        let theme = self.theme;
+        let matches = self.palette_matches(cx);
+
+        let mut list = div().flex().flex_col();
+        for (index, item) in matches.iter().enumerate() {
+            let action = item.action.clone();
+            let selected = index == self.palette_selected;
+            list = list.child(
+                div()
+                    .id(("palette-row", index))
+                    .px(px(12.))
+                    .py(px(5.))
+                    .text_size(px(13.))
+                    .when(selected, |d| d.bg(theme.selected))
+                    .hover(|d| d.bg(theme.hover))
+                    .cursor_pointer()
+                    .child(item.label.clone())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.close_palette(window, cx);
+                        this.run_palette_action(action.clone(), window, cx);
+                    })),
+            );
+        }
+        if matches.is_empty() {
+            list = list.child(
+                div()
+                    .px(px(12.))
+                    .py(px(5.))
+                    .text_size(px(13.))
+                    .text_color(theme.muted)
+                    .child("no matching command"),
+            );
+        }
+
+        Some(
+            div()
+                .id("palette-overlay")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .occlude()
+                .on_click(cx.listener(|this, _, window, cx| this.close_palette(window, cx)))
+                .child(
+                    div()
+                        .id("palette-panel")
+                        .occlude()
+                        .mx_auto()
+                        .mt(px(110.))
+                        .w(px(560.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.elevated)
+                        .shadow_lg()
+                        .child(
+                            div()
+                                .p(px(8.))
+                                .border_b_1()
+                                .border_color(theme.border)
+                                .child(self.palette_input.clone()),
+                        )
+                        .child(list),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_status(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let (line, column) = self.editor.read(cx).cursor_line_column();
@@ -1597,7 +1869,7 @@ impl Workspace {
                     .gap(px(14.))
                     .child(format!("ln {}, col {}", line + 1, column + 1))
                     .child(SharedString::from(format!(
-                        "{} · {} · ⌘K search · ⌘N new · ⌘S save · ⌘E {} · ⌘⇧E split · ⌘G graph · ⌘T tags · ⌘⇧L {}",
+                        "{} · {} · ⌘K search · ⌘⇧P commands · ⌘E {} · ⌘⇧E split · ⌘G graph · ⌘T tags · ⌘⇧L {}",
                         self.vault.name,
                         self.status,
                         match self.mode {
@@ -1637,6 +1909,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomIn, _w, cx| this.set_zoom(this.zoom + 0.1, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _w, cx| this.set_zoom(this.zoom - 0.1, cx)))
             .on_action(cx.listener(|this, _: &ZoomReset, _w, cx| this.set_zoom(1.0, cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)),
+            )
             .on_action(cx.listener(Self::on_toggle_graph))
             .on_action(cx.listener(|this, _: &NewNote, window, cx| this.new_note(window, cx)))
             .on_action(cx.listener(|this, _: &ReindexVault, _w, cx| this.reindex(cx)))
@@ -1698,5 +1973,6 @@ impl Render for Workspace {
                     ),
             )
             .child(self.render_status(cx))
+            .children(self.render_palette(cx))
     }
 }
