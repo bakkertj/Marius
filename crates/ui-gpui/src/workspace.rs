@@ -40,7 +40,10 @@ actions!(
         ToggleReading,
         ToggleSplit,
         ToggleGraph,
-        SuggestTags
+        SuggestTags,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset
     ]
 );
 
@@ -68,6 +71,17 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-shift-e")), ToggleSplit, None),
         // Ask the configured model for tags (TAG-005).
         KeyBinding::new(key(format!("{primary}-t")), SuggestTags, None),
+        // Font zoom, ctrl-shift-plus / ctrl-shift-minus / ctrl-shift-0.
+        // macOS folds shift into the produced character, so every
+        // spelling the platform might report is bound: shift-= is "+",
+        // shift-- is "_", shift-0 is ")".
+        KeyBinding::new("ctrl-shift-=", ZoomIn, None),
+        KeyBinding::new("ctrl-shift-+", ZoomIn, None),
+        KeyBinding::new("ctrl-+", ZoomIn, None),
+        KeyBinding::new("ctrl-shift--", ZoomOut, None),
+        KeyBinding::new("ctrl-_", ZoomOut, None),
+        KeyBinding::new("ctrl-shift-0", ZoomReset, None),
+        KeyBinding::new("ctrl-)", ZoomReset, None),
         // The knowledge graph (GRAPH-001).
         KeyBinding::new(key(format!("{primary}-g")), ToggleGraph, None),
     ]
@@ -250,6 +264,9 @@ pub struct Workspace {
     /// A semantic/hybrid search on its worker thread (`?`/`??` + Enter):
     /// the query embedding is a model call, so it never runs live.
     semantic: Option<std::sync::mpsc::Receiver<std::result::Result<Vec<Row>, String>>>,
+    /// Content font scale (⌃⇧+/− / ⌃⇧0). Applies to the editor, the
+    /// preview and the split; the chrome stays put.
+    zoom: f32,
     /// Debounced filesystem watcher (IM-010); `None` when the platform
     /// refused one, in which case ⌘R stays the manual fallback.
     watcher: Option<VaultWatcher>,
@@ -341,6 +358,7 @@ impl Workspace {
             open_provenance: None,
             suggestion: None,
             semantic: None,
+            zoom: 1.0,
             watcher,
             focus_handle: cx.focus_handle(),
         };
@@ -960,6 +978,20 @@ impl Workspace {
                 window.focus(&handle);
                 ViewMode::Edit
             }
+        };
+        cx.notify();
+    }
+
+    fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        let zoom = (zoom * 10.0).round() / 10.0;
+        self.zoom = zoom.clamp(0.6, 2.4);
+        let zoom = self.zoom;
+        self.preview
+            .update(cx, |preview, cx| preview.set_zoom(zoom, cx));
+        self.status = if (zoom - 1.0).abs() < f32::EPSILON {
+            "zoom 100%".into()
+        } else {
+            format!("zoom {:.0}%", zoom * 100.0).into()
         };
         cx.notify();
     }
@@ -1606,6 +1638,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_reading))
             .on_action(cx.listener(Self::on_toggle_split))
             .on_action(cx.listener(|this, _: &SuggestTags, _w, cx| this.suggest_tags(cx)))
+            .on_action(cx.listener(|this, _: &ZoomIn, _w, cx| this.set_zoom(this.zoom + 0.1, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _w, cx| this.set_zoom(this.zoom - 0.1, cx)))
+            .on_action(cx.listener(|this, _: &ZoomReset, _w, cx| this.set_zoom(1.0, cx)))
             .on_action(cx.listener(Self::on_toggle_graph))
             .on_action(cx.listener(|this, _: &NewNote, window, cx| this.new_note(window, cx)))
             .on_action(cx.listener(|this, _: &ReindexVault, _w, cx| this.reindex(cx)))
@@ -1631,32 +1666,38 @@ impl Render for Workspace {
                             .min_w(px(0.))
                             .child(self.render_properties(cx))
                             .child(
-                                div().flex_grow().min_h(px(0.)).child(match self.mode {
-                                    ViewMode::Edit => self.editor.clone().into_any_element(),
-                                    ViewMode::Reading => self.preview.clone().into_any_element(),
-                                    ViewMode::Split => div()
-                                        .flex()
-                                        .flex_row()
-                                        .size_full()
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w(px(0.))
-                                                .h_full()
-                                                .border_r_1()
-                                                .border_color(theme.border)
-                                                .child(self.editor.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w(px(0.))
-                                                .h_full()
-                                                .child(self.preview.clone()),
-                                        )
-                                        .into_any_element(),
-                                    ViewMode::Graph => self.graph.clone().into_any_element(),
-                                }),
+                                div()
+                                    .flex_grow()
+                                    .min_h(px(0.))
+                                    .text_size(px(14.0 * self.zoom))
+                                    .child(match self.mode {
+                                        ViewMode::Edit => self.editor.clone().into_any_element(),
+                                        ViewMode::Reading => {
+                                            self.preview.clone().into_any_element()
+                                        }
+                                        ViewMode::Split => div()
+                                            .flex()
+                                            .flex_row()
+                                            .size_full()
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w(px(0.))
+                                                    .h_full()
+                                                    .border_r_1()
+                                                    .border_color(theme.border)
+                                                    .child(self.editor.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w(px(0.))
+                                                    .h_full()
+                                                    .child(self.preview.clone()),
+                                            )
+                                            .into_any_element(),
+                                        ViewMode::Graph => self.graph.clone().into_any_element(),
+                                    }),
                             ),
                     ),
             )

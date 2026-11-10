@@ -446,6 +446,8 @@ pub struct Preview {
     theme: Theme,
     blocks: Vec<Block>,
     context: Box<dyn PreviewContext>,
+    /// Font scale (⌃⇧+/−), 1.0 = the design sizes.
+    zoom: f32,
 }
 
 impl EventEmitter<PreviewEvent> for Preview {}
@@ -456,11 +458,17 @@ impl Preview {
             theme,
             blocks: Vec::new(),
             context,
+            zoom: 1.0,
         }
     }
 
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
+        cx.notify();
+    }
+
+    pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        self.zoom = zoom;
         cx.notify();
     }
 
@@ -603,13 +611,14 @@ impl Preview {
         *index += 1;
         let id = *index;
         let theme = self.theme;
+        let z = self.zoom;
         match block {
             Block::Heading { level, inline } => {
                 let (size, weight) = match level {
-                    1 => (px(26.), FontWeight::BOLD),
-                    2 => (px(21.), FontWeight::BOLD),
-                    3 => (px(17.), FontWeight::BOLD),
-                    _ => (px(15.), FontWeight::SEMIBOLD),
+                    1 => (px(26.0 * z), FontWeight::BOLD),
+                    2 => (px(21.0 * z), FontWeight::BOLD),
+                    3 => (px(17.0 * z), FontWeight::BOLD),
+                    _ => (px(15.0 * z), FontWeight::SEMIBOLD),
                 };
                 let base = self.base_style(size, weight, theme.text);
                 div()
@@ -619,30 +628,36 @@ impl Preview {
                     .into_any_element()
             }
             Block::Paragraph(inline) => {
-                let base = self.base_style(px(15.), FontWeight::NORMAL, theme.text);
+                let base = self.base_style(px(15.0 * z), FontWeight::NORMAL, theme.text);
                 div()
                     .py(px(4.))
                     .child(self.render_inline(("p", id).into(), inline, base, cx))
                     .into_any_element()
             }
             Block::Code { lang, text } => {
+                // Code does not reflow — a wrapped line changes meaning —
+                // so long lines scroll sideways inside the block instead
+                // of being clipped.
                 let mut code = div()
+                    .id(("code", id))
                     .my(px(6.))
                     .p(px(10.))
                     .rounded(px(6.))
                     .bg(theme.code_background)
                     .text_color(theme.code_text)
                     .font_family(mono_family())
-                    .text_size(px(12.5));
+                    .text_size(px(12.5 * z))
+                    .overflow_x_scroll();
                 if let Some(lang) = lang {
                     code = code.child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(px(10.0 * z))
                             .text_color(theme.muted)
                             .child(lang.clone()),
                     );
                 }
-                code.child(text.clone()).into_any_element()
+                code.child(div().whitespace_nowrap().child(text.clone()))
+                    .into_any_element()
             }
             Block::Quote(blocks) => {
                 let mut quote = div()
@@ -702,7 +717,7 @@ impl Preview {
                     } else {
                         FontWeight::NORMAL
                     };
-                    let base = this.base_style(px(13.5), weight, this.theme.text);
+                    let base = this.base_style(px(13.5 * this.zoom), weight, this.theme.text);
                     div()
                         .flex_1()
                         .min_w(px(0.))
@@ -778,7 +793,16 @@ impl Render for Preview {
         let theme = self.theme;
         let blocks = self.blocks.clone();
         let mut index = 0usize;
-        let mut column = div().flex().flex_col().max_w(px(740.)).pb(px(60.));
+        // `w_full` + `max_w`: fill the pane up to the measure, *shrink*
+        // below it. Without the fill, the column's intrinsic (unwrapped)
+        // width hits the cap and `justify_center` clips both edges in any
+        // pane narrower than the cap — exactly what the split view exposed.
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .max_w(px(740.0 * self.zoom))
+            .pb(px(60.));
         for block in &blocks {
             column = column.child(self.render_block(&mut index, block, cx));
         }
@@ -788,12 +812,13 @@ impl Render for Preview {
             .overflow_y_scroll()
             .bg(theme.background)
             .text_color(theme.text)
-            .text_size(px(15.))
+            .text_size(px(15.0 * self.zoom))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .justify_center()
+                    .min_w(px(0.))
                     .px(px(28.))
                     .pt(px(18.))
                     .child(column),

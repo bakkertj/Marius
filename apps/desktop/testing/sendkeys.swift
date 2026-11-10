@@ -100,6 +100,9 @@ while i < args.count {
     case "--cmd-shift":
         i += 1
         post(keycode(args[i]), flags: [.maskCommand, .maskShift])
+    case "--ctrl-shift":
+        i += 1
+        post(keycode(args[i]), flags: [.maskControl, .maskShift])
     case "--shift-key":
         i += 1
         post(keycode(args[i]), flags: .maskShift)

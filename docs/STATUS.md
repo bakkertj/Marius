@@ -75,6 +75,12 @@ every platform, since the file is created on the Mac. Three behaviours:
   drawable (GRAPH-014). Assembly (`core::graph`) and the deterministic
   force simulation (`ui-gpui/graph.rs`) are headlessly tested; the canvas
   is the thin part.
+- **Pane-true rendering and zoom**: the preview column now fills and
+  shrinks with its pane (the split view had been clipping both edges of
+  any pane narrower than the 740px measure); code blocks keep their
+  lines and scroll sideways instead of wrapping or clipping; ⌃⇧+/⌃⇧−
+  scale the content fonts (editor, preview, split) with ⌃⇧0 to reset —
+  the chrome stays put.
 - **Semantic search from the search box**: `?query` + Enter retrieves
   by meaning, `??query` fuses with keyword rank — both on a worker
   thread, since the query embedding is a model call. Results land in
