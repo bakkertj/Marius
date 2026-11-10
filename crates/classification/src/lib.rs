@@ -49,11 +49,16 @@ pub fn tagging_request(
     }
     let body_excerpt = truncate_on_char_boundary(body, BODY_BUDGET);
     let system = format!(
-        "You assign topic tags to personal notes. Reply with ONLY a JSON array \
-         of lowercase tag strings, most relevant first, at most {max_tags}. \
-         Use '/' for hierarchy (e.g. \"history/maritime\"). Prefer reusing \
-         the vault's existing tags when they fit; invent a new tag only when \
-         nothing existing does. No commentary."
+        "You tag personal notes so their author can find them again. Reply \
+         with ONLY a JSON array of lowercase tag strings, most relevant \
+         first, at most {max_tags}. Use '/' for hierarchy (e.g. \
+         \"vendor/cisco\"). Prefer the specific, searchable names in the \
+         note over broad topics: exact product names and part numbers (e.g. \
+         \"cisco-c9200l-48p-4x-e\"), program and project names, vendors, \
+         protocols, standards, people's organisations, places — the words \
+         the author would type into search. Add at most two broader topic \
+         tags after the specific ones. Reuse the vault's existing tags when \
+         they genuinely fit; never force one. No commentary."
     );
     let user = if vocab.is_empty() {
         format!("Title: {title}\n\n{body_excerpt}")
@@ -114,13 +119,23 @@ pub fn parse_suggestions(reply: &str, max: usize) -> Vec<TagSuggestion> {
 /// A tag is a label, not a sentence. Models that ignore instructions
 /// produce prose fragments, and normalisation dutifully hyphenates them
 /// into "valid" names — so validity is not enough. Each hierarchy level
-/// may carry at most three words, and the whole name stays short.
+/// may carry at most three *words*, and the whole name stays short.
+///
+/// Only alphabetic segments count as words: a part number like
+/// "cisco-c9200l-48p-4x-e" is five segments but no sentence, and part
+/// numbers are exactly the tags worth keeping (a real user's switch
+/// model was silently dropped by a naive segment count).
 fn looks_like_a_tag(name: &TagName) -> bool {
     let text = name.as_str();
     text.len() <= 40
-        && text
-            .split('/')
-            .all(|level| level.split('-').count() <= 3 && !level.is_empty())
+        && text.split('/').all(|level| {
+            !level.is_empty()
+                && level
+                    .split('-')
+                    .filter(|segment| segment.chars().all(char::is_alphabetic))
+                    .count()
+                    <= 3
+        })
 }
 
 fn extract_candidates(reply: &str) -> Vec<String> {
@@ -258,6 +273,23 @@ mod tests {
         assert_eq!(
             names(&got),
             ["maritime-history", "history/ottoman-empire", "lighthouse"]
+        );
+    }
+
+    #[test]
+    fn part_numbers_and_program_names_survive_and_prose_still_dies() {
+        let got = parse_suggestions(
+            r#"["Cisco_C9200L-48P-4X-E", "managed switch", "program/falcon-9",
+                "and this is where the story gets really interesting"]"#,
+            8,
+        );
+        assert_eq!(
+            names(&got),
+            [
+                "cisco-c9200l-48p-4x-e",
+                "managed-switch",
+                "program/falcon-9"
+            ]
         );
     }
 
