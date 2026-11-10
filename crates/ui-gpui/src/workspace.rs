@@ -39,7 +39,8 @@ actions!(
         ReindexVault,
         ToggleReading,
         ToggleSplit,
-        ToggleGraph
+        ToggleGraph,
+        SuggestTags
     ]
 );
 
@@ -65,6 +66,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-e")), ToggleReading, None),
         // Side-by-side preview (MD-003).
         KeyBinding::new(key(format!("{primary}-shift-e")), ToggleSplit, None),
+        // Ask the configured model for tags (TAG-005).
+        KeyBinding::new(key(format!("{primary}-t")), SuggestTags, None),
         // The knowledge graph (GRAPH-001).
         KeyBinding::new(key(format!("{primary}-g")), ToggleGraph, None),
     ]
@@ -233,9 +236,17 @@ pub struct Workspace {
     applied_query: String,
     status: SharedString,
     tag_counts: Vec<(SharedString, u64)>,
-    /// The open document's tags with real provenance, for the properties
-    /// strip (UI-002, UI-010). One query per open, not per frame.
-    open_tags: Vec<(SharedString, Provenance)>,
+    /// The open document's tags with real provenance and review state,
+    /// for the properties strip and its approve/reject loop (UI-002,
+    /// UI-010, TAG-007). One query per open, not per frame.
+    open_tags: Vec<(SharedString, Provenance, marius_model::ReviewState)>,
+    /// Provenance banner for a generated note (AI-011): who made it,
+    /// from what, and whether a person has edited it since.
+    open_provenance: Option<marius_model::GeneratedNoteProvenance>,
+    /// A tag-suggestion run on its worker thread (⌘T). The worker opens
+    /// its own connection — WAL serves both — because an LLM call must
+    /// never freeze the interface.
+    suggestion: Option<std::sync::mpsc::Receiver<std::result::Result<Vec<String>, String>>>,
     /// Debounced filesystem watcher (IM-010); `None` when the platform
     /// refused one, in which case ⌘R stays the manual fallback.
     watcher: Option<VaultWatcher>,
@@ -285,7 +296,9 @@ impl Workspace {
         let watcher = VaultWatcher::new(&vault.root, std::time::Duration::from_millis(400))
             .map_err(|error| eprintln!("watch: {error} — falling back to manual reindex (⌘R)"))
             .ok();
-        if watcher.is_some() {
+        // The timer also collects ⌘T suggestion results, so it runs even
+        // when the platform refused a watcher.
+        {
             cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor()
@@ -321,6 +334,8 @@ impl Workspace {
             status: "ready".into(),
             tag_counts: Vec::new(),
             open_tags: Vec::new(),
+            open_provenance: None,
+            suggestion: None,
             watcher,
             focus_handle: cx.focus_handle(),
         };
@@ -472,14 +487,19 @@ impl Workspace {
 
     fn refresh_open_tags(&mut self) {
         self.open_tags.clear();
+        self.open_provenance = None;
         let Some(id) = self.open_document else { return };
         let app = self.app.borrow();
         if let Ok(tags) = app.document_tags(id) {
             for (tag, assignment) in tags {
-                self.open_tags
-                    .push((tag.canonical_name.to_string().into(), assignment.provenance));
+                self.open_tags.push((
+                    tag.canonical_name.to_string().into(),
+                    assignment.provenance,
+                    assignment.review,
+                ));
             }
         }
+        self.open_provenance = app.note_provenance(id).ok().flatten();
     }
 
     /// Rebuild the explorer rows after a collapse toggle, without touching
@@ -506,6 +526,7 @@ impl Workspace {
     /// Open a document in the editor, autosaving the previous one (MD-004).
     /// Drain the filesystem watcher and fold external edits in (IM-010).
     fn poll_watcher(&mut self, cx: &mut Context<Self>) {
+        self.poll_suggestion(cx);
         let Some(changes) = self.watcher.as_ref().and_then(|w| w.try_changes()) else {
             return;
         };
@@ -565,6 +586,37 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Collect a finished ⌘T run, if one is cooking.
+    fn poll_suggestion(&mut self, cx: &mut Context<Self>) {
+        let Some(receiver) = &self.suggestion else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(applied)) => {
+                self.status = if applied.is_empty() {
+                    "the model proposed nothing new".into()
+                } else {
+                    format!("proposed: {} — review with ✓/✗ above", applied.join(", ")).into()
+                };
+                self.suggestion = None;
+                self.refresh_open_tags();
+                self.refresh_tags();
+                cx.notify();
+            }
+            Ok(Err(reason)) => {
+                self.status = format!("no suggestions: {reason}").into();
+                self.suggestion = None;
+                cx.notify();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.status = "the suggestion worker died".into();
+                self.suggestion = None;
+                cx.notify();
+            }
+        }
     }
 
     fn open(&mut self, id: DocumentId, cx: &mut Context<Self>) {
@@ -804,6 +856,46 @@ impl Workspace {
                 ViewMode::Edit
             }
         };
+        cx.notify();
+    }
+
+    /// ⌘T: tag suggestions for the open note, off the UI thread.
+    ///
+    /// The worker opens its own `Marius` on the same data directory —
+    /// SQLite's WAL serves both connections — because a local model can
+    /// take long seconds and the interface must not freeze for them.
+    /// `poll_watcher`'s timer collects the result.
+    fn suggest_tags(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.open_document else {
+            self.status = "no document to tag".into();
+            cx.notify();
+            return;
+        };
+        if self.suggestion.is_some() {
+            self.status = "a suggestion run is already underway".into();
+            cx.notify();
+            return;
+        }
+        self.autosave(cx);
+        let data_dir = self.app.borrow().data_dir().to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<Vec<String>, String> {
+                let mut app = Marius::open(&data_dir).map_err(|e| e.to_string())?;
+                let result = app.suggest_tags(id, true).map_err(|e| e.to_string())?;
+                if result.suggestions.is_empty() {
+                    return Err(result.reason);
+                }
+                Ok(result
+                    .applied
+                    .iter()
+                    .map(|t| t.as_str().to_owned())
+                    .collect())
+            })();
+            let _ = sender.send(result);
+        });
+        self.suggestion = Some(receiver);
+        self.status = "asking the model for tags…".into();
         cx.notify();
     }
 
@@ -1210,41 +1302,137 @@ impl Workspace {
     /// The open document's identity and tags, colour-coded by provenance:
     /// green is yours, amber is a model's unreviewed proposal, blue is a
     /// proposal you accepted (UI-010).
-    fn render_properties(&self) -> impl IntoElement {
+    fn render_properties(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let title = self.open_title.clone();
 
-        let mut chips = div().flex().flex_row().flex_wrap().gap(px(4.));
-        for (tag, provenance) in &self.open_tags {
+        let mut chips = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(4.));
+        for (index, (tag, provenance, review)) in self.open_tags.iter().enumerate() {
             let marker = match provenance {
                 Provenance::AiGenerated => "~",
                 Provenance::AiConfirmed => "+",
                 _ => "",
             };
-            chips = chips.child(
-                div()
-                    .px(px(6.))
-                    .py(px(1.))
-                    .text_size(px(11.))
-                    .rounded(px(9.))
-                    .bg(theme.elevated)
-                    .text_color(theme.tag_colour(*provenance))
-                    .child(format!("{marker}#{tag}")),
-            );
+            let mut chip = div()
+                .id(("tagchip", index))
+                .flex()
+                .flex_row()
+                .items_center()
+                .px(px(6.))
+                .py(px(1.))
+                .text_size(px(11.))
+                .rounded(px(9.))
+                .bg(theme.elevated)
+                .text_color(theme.tag_colour(*provenance))
+                .child(format!("{marker}#{tag}"));
+
+            // A machine proposal awaiting review gets its decision right
+            // on the chip (TAG-007, UI-010): accept promotes, reject is
+            // durable against reclassification.
+            let reviewable = *provenance == Provenance::AiGenerated
+                && *review == marius_model::ReviewState::Unreviewed;
+            if reviewable {
+                let accept: SharedString = tag.clone();
+                let reject: SharedString = tag.clone();
+                chip = chip
+                    .child(
+                        div()
+                            .id(("tagyes", index))
+                            .pl(px(5.))
+                            .text_color(theme.tag_confirmed)
+                            .hover(|d| d.text_color(theme.text))
+                            .cursor_pointer()
+                            .child("✓")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.review_tag(&accept, true, cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(("tagno", index))
+                            .pl(px(3.))
+                            .text_color(theme.muted)
+                            .hover(|d| d.text_color(theme.text))
+                            .cursor_pointer()
+                            .child("✗")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.review_tag(&reject, false, cx);
+                            })),
+                    );
+            }
+            chips = chips.child(chip);
         }
 
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .px(px(16.))
-            .py(px(7.))
-            .bg(theme.surface)
-            .border_b_1()
-            .border_color(theme.border)
-            .child(div().font_weight(gpui::FontWeight::BOLD).child(title))
-            .child(chips)
+        let mut strip = div().flex().flex_col();
+        strip = strip.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .px(px(16.))
+                .py(px(7.))
+                .bg(theme.surface)
+                .border_b_1()
+                .border_color(theme.border)
+                .child(div().font_weight(gpui::FontWeight::BOLD).child(title))
+                .child(chips),
+        );
+
+        // The generated-note banner (AI-011, UI-010): a derived note says
+        // so, names its maker and sources, and says whether regeneration
+        // may still touch it.
+        if let Some(provenance) = &self.open_provenance {
+            let sources: Vec<String> = provenance.sources.iter().map(|s| s.label.clone()).collect();
+            let state = if provenance.user_edited {
+                "edited by hand since — regeneration writes a sibling"
+            } else {
+                "untouched — regeneration replaces in place"
+            };
+            strip = strip.child(
+                div()
+                    .px(px(16.))
+                    .py(px(4.))
+                    .bg(theme.elevated)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .text_size(px(11.))
+                    .text_color(theme.muted)
+                    .child(format!(
+                        "⚙ {} · from {} · {}",
+                        provenance.attribution(),
+                        sources.join(", "),
+                        state
+                    )),
+            );
+        }
+        strip
+    }
+
+    /// Settle one proposed tag from the chip (TAG-007).
+    fn review_tag(&mut self, tag: &str, accept: bool, cx: &mut Context<Self>) {
+        let Some(id) = self.open_document else { return };
+        let outcome = {
+            let mut app = self.app.borrow_mut();
+            if accept {
+                app.approve_tag(id, tag).map(|_| "approved")
+            } else {
+                app.reject_tag(id, tag, None)
+                    .map(|_| "rejected — it will not be re-proposed")
+            }
+        };
+        match outcome {
+            Ok(verdict) => self.status = format!("#{tag} {verdict}").into(),
+            Err(error) => self.status = format!("review: {error}").into(),
+        }
+        self.refresh_open_tags();
+        self.refresh_tags();
+        cx.notify();
     }
 
     fn render_status(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -1276,7 +1464,7 @@ impl Workspace {
                     .gap(px(14.))
                     .child(format!("ln {}, col {}", line + 1, column + 1))
                     .child(SharedString::from(format!(
-                        "{} · {} · ⌘K search · ⌘N new · ⌘S save · ⌘E {} · ⌘⇧E split · ⌘G graph · ⌘⇧L {}",
+                        "{} · {} · ⌘K search · ⌘N new · ⌘S save · ⌘E {} · ⌘⇧E split · ⌘G graph · ⌘T tags · ⌘⇧L {}",
                         self.vault.name,
                         self.status,
                         match self.mode {
@@ -1312,6 +1500,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_appearance))
             .on_action(cx.listener(Self::on_toggle_reading))
             .on_action(cx.listener(Self::on_toggle_split))
+            .on_action(cx.listener(|this, _: &SuggestTags, _w, cx| this.suggest_tags(cx)))
             .on_action(cx.listener(Self::on_toggle_graph))
             .on_action(cx.listener(|this, _: &NewNote, window, cx| this.new_note(window, cx)))
             .on_action(cx.listener(|this, _: &ReindexVault, _w, cx| this.reindex(cx)))
@@ -1335,7 +1524,7 @@ impl Render for Workspace {
                             .flex_grow()
                             .h_full()
                             .min_w(px(0.))
-                            .child(self.render_properties())
+                            .child(self.render_properties(cx))
                             .child(
                                 div().flex_grow().min_h(px(0.)).child(match self.mode {
                                     ViewMode::Edit => self.editor.clone().into_any_element(),

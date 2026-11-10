@@ -75,6 +75,15 @@ every platform, since the file is created on the Mac. Three behaviours:
   drawable (GRAPH-014). Assembly (`core::graph`) and the deterministic
   force simulation (`ui-gpui/graph.rs`) are headlessly tested; the canvas
   is the thin part.
+- **The intelligence reaches the desktop**: ⌘T asks the configured
+  model for tags on its own worker thread (a second WAL connection; the
+  interface never freezes for a model), proposals appear as `~#tag`
+  chips with ✓/✗ review in place, and a generated note carries a banner
+  naming its model, sources, and whether regeneration may still touch
+  it. `marius classify` works through the untagged backlog; with
+  `vault policy --auto-classify true`, `marius watch` proposes tags for
+  every changed note automatically (AI-010), always unreviewed, always
+  behind the rejection gates.
 - **Filesystem watching (IM-010)**: edits made by other programs — including
   a `git pull` or a sync client — appear in the tree, tags and search within
   a second, with no reindex. A batch containing an unfamiliar or vanished

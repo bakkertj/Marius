@@ -2299,6 +2299,30 @@ impl Marius {
         Ok(None)
     }
 
+    /// Documents in `vault` with no machine-proposed tags yet — the
+    /// backlog `marius classify` works through (AI-010).
+    pub fn unclassified(&self, vault: VaultId) -> Result<Vec<Document>> {
+        let filter = documents::Filter {
+            vaults: vec![vault],
+            kinds: vec![DocumentKind::Markdown],
+            exclude_generated: true,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        for document in documents::list(self.db.conn(), &filter)? {
+            let has_machine_tag = self.document_tags(document.id)?.iter().any(|(_, dt)| {
+                matches!(
+                    dt.provenance,
+                    marius_model::Provenance::AiGenerated | marius_model::Provenance::AiConfirmed
+                )
+            });
+            if !has_machine_tag {
+                out.push(document);
+            }
+        }
+        Ok(out)
+    }
+
     /// The inference audit log, newest first (AI-015, SEC-006).
     pub fn inference_log(&self, limit: usize) -> Result<Vec<InferenceRecord>> {
         Ok(inference::recent(self.db.conn(), limit)?)

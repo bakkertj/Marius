@@ -92,6 +92,17 @@ enum Command {
     #[command(subcommand)]
     Note(NoteCommand),
 
+    /// Propose tags for every note that has none from a model yet
+    /// (AI-010). Each suggestion lands unreviewed for `marius tag
+    /// approve/reject`; rejected tags stay rejected.
+    Classify {
+        /// Vault name. Omit when exactly one vault is open.
+        vault: Option<String>,
+        /// Most documents to classify this run.
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+
     /// Propose semantic relationships between notes (GRAPH-007). Needs
     /// `marius embed` to have run; review with `marius link`.
     Discover {
@@ -583,6 +594,37 @@ fn run(cli: &Cli) -> Result<()> {
                 Ok(())
             }
         },
+        Command::Classify { vault, limit } => {
+            let vault = one_vault(&app, vault.as_deref())?;
+            let backlog = app.unclassified(vault.id)?;
+            if backlog.is_empty() {
+                println!("every note already has model-proposed tags");
+                return Ok(());
+            }
+            let total = backlog.len();
+            let mut classified = 0usize;
+            for document in backlog.into_iter().take(*limit) {
+                let result = app.suggest_tags(document.id, true)?;
+                if result.record.outcome != marius_model::InferenceOutcome::Completed {
+                    println!("stopped: {}", result.reason);
+                    break;
+                }
+                classified += 1;
+                println!(
+                    "{}: {} applied, {} skipped",
+                    document.path,
+                    result.applied.len(),
+                    result.skipped.len()
+                );
+            }
+            if classified < total {
+                println!(
+                    "{} of {} classified; run again for the rest",
+                    classified, total
+                );
+            }
+            Ok(())
+        }
         Command::Discover { vault, limit } => {
             let vault = one_vault(&app, vault.as_deref())?;
             let report = app.discover_relationships(&vault, *limit)?;
@@ -1375,6 +1417,37 @@ fn watch_command(app: &mut Marius, vault: Option<&str>, debounce_ms: u64) -> Res
                     "reconciled: {} added, {} modified, {} moved, {} removed",
                     report.added, report.modified, report.moved, report.removed
                 );
+            }
+        }
+
+        // AI-010: with the vault's consent, changed notes get fresh tag
+        // proposals — still unreviewed, still gated, still audited. The
+        // watcher is the right place: it is already the background
+        // process, and a slow model call here blocks no interface.
+        if app.vault_policy(vault.id)?.auto_classify {
+            for path in &changes.paths {
+                let Some(document) = app.document_at(vault.id, path)? else {
+                    continue;
+                };
+                if !document.kind.is_markdown() {
+                    continue;
+                }
+                match app.suggest_tags(document.id, true) {
+                    Ok(result) if !result.applied.is_empty() => {
+                        println!(
+                            "  proposed for {}: {}",
+                            path,
+                            result
+                                .applied
+                                .iter()
+                                .map(|t| t.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => println!("  classify {path}: {error}"),
+                }
             }
         }
     }

@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **138 done, 24 partial, 7 ready, 25 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **139 done, 23 partial, 7 ready, 25 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -126,7 +126,7 @@ Totals of 194 requirement IDs: **138 done, 24 partial, 7 ready, 25 open**. Every
 | AI-007 | done | `Sensitivity::default`, `VaultPolicy::effective` | `a_sensitivity_declared_in_frontmatter_...only_tightens` |
 | AI-008 | done | `Sensitivity::across` | `strictest_level_wins_across_a_prompt` |
 | AI-009 | done | `Authorship`, `Provenance` | Enforced in storage, not just intended. |
-| AI-010 | partial | `suggest_tags(apply)`, review flow | Suggestions land unreviewed for approval; background auto-classification on index still off. |
+| AI-010 | done | `marius classify`, watcher auto-classify, ⌘T + chip review | Opt-in per vault (`auto_classify`); `marius watch` proposes for changed notes; everything lands unreviewed behind the gates. |
 | AI-011 | done | `Marius::summarize`, `storage::generated`, `marius summarize` | `a_summary_lands_as_a_derived_note_with_visible_provenance` — provenance row and in-file Sources section. |
 | AI-012 | done | `Authorship::Derived`, `is:generated` | `ai_012_generated_notes_are_filterable` |
 | AI-013 | done | save-hook flips `user_edited`; regenerate consults it | `regeneration_replaces_in_place_until_a_person_edits_then_writes_a_sibling` |
@@ -227,7 +227,7 @@ Totals of 194 requirement IDs: **138 done, 24 partial, 7 ready, 25 open**. Every
 | UI-007 | open | — | Phase 7. |
 | UI-008 | done | crate graph | `model` has no I/O; `core` has no UI assumption. |
 | UI-009 | open | — | Needs the UI. |
-| UI-010 | done | `cli::render::marker`, `provenance_note` | `marius tag list` shows `= ~ + !`. |
+| UI-010 | done | CLI markers; GUI chips with ✓/✗ review + generated-note banner | Proposals reviewable in place; a derived note names its maker, sources and edit state. |
 | UI-011 | open | — | P2. |
 
 ## 5. Security, privacy and trust
