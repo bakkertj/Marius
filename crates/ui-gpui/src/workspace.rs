@@ -247,6 +247,9 @@ pub struct Workspace {
     /// its own connection — WAL serves both — because an LLM call must
     /// never freeze the interface.
     suggestion: Option<std::sync::mpsc::Receiver<std::result::Result<Vec<String>, String>>>,
+    /// A semantic/hybrid search on its worker thread (`?`/`??` + Enter):
+    /// the query embedding is a model call, so it never runs live.
+    semantic: Option<std::sync::mpsc::Receiver<std::result::Result<Vec<Row>, String>>>,
     /// Debounced filesystem watcher (IM-010); `None` when the platform
     /// refused one, in which case ⌘R stays the manual fallback.
     watcher: Option<VaultWatcher>,
@@ -268,7 +271,8 @@ impl Workspace {
             cache: RefCell::new(HashMap::new()),
         });
         let editor = cx.new(|cx| Editor::new(cx, theme, resolver));
-        let search = cx.new(|cx| Editor::single_line(cx, theme, "Search, or type a title…  (⌘K)"));
+        let search =
+            cx.new(|cx| Editor::single_line(cx, theme, "Search… (⌘K) · ?semantic · ??hybrid"));
         let preview_base = Rc::new(VaultPreviewContext {
             app: app.clone(),
             vault: vault.id,
@@ -336,6 +340,7 @@ impl Workspace {
             open_tags: Vec::new(),
             open_provenance: None,
             suggestion: None,
+            semantic: None,
             watcher,
             focus_handle: cx.focus_handle(),
         };
@@ -455,6 +460,15 @@ impl Workspace {
                     .collect();
                 self.tree = tree::rows(&triples, &self.collapsed);
             }
+        } else if let Some(stripped) = query.strip_prefix('?') {
+            // Semantic (`?`) and hybrid (`??`) run on Enter, not per
+            // keystroke: the query embedding is a model call (SRCH-007).
+            let mode = if stripped.starts_with('?') {
+                "hybrid"
+            } else {
+                "semantic"
+            };
+            self.status = format!("{mode} search: press Enter to run").into();
         } else {
             match app.search(
                 &query,
@@ -527,6 +541,7 @@ impl Workspace {
     /// Drain the filesystem watcher and fold external edits in (IM-010).
     fn poll_watcher(&mut self, cx: &mut Context<Self>) {
         self.poll_suggestion(cx);
+        self.poll_semantic(cx);
         let Some(changes) = self.watcher.as_ref().and_then(|w| w.try_changes()) else {
             return;
         };
@@ -586,6 +601,91 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// `?query` / `??query` + Enter: semantic or hybrid retrieval on a
+    /// worker thread, results delivered by the poll timer (SRCH-007/009).
+    fn run_semantic(&mut self, stripped: String, cx: &mut Context<Self>) {
+        if self.semantic.is_some() {
+            self.status = "a semantic search is already running".into();
+            cx.notify();
+            return;
+        }
+        let (hybrid, query) = match stripped.strip_prefix('?') {
+            Some(rest) => (true, rest.trim().to_owned()),
+            None => (false, stripped.trim().to_owned()),
+        };
+        if query.is_empty() {
+            return;
+        }
+        let data_dir = self.app.borrow().data_dir().to_path_buf();
+        let vault = self.vault.id;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<Vec<Row>, String> {
+                let mut app = Marius::open(&data_dir).map_err(|e| e.to_string())?;
+                let results = if hybrid {
+                    app.hybrid_search(&query, vault, 50)
+                } else {
+                    app.semantic_search(&query, vault, 50)
+                }
+                .map_err(|e| e.to_string())?;
+                if let Some(refusal) = results.refusal {
+                    return Err(refusal);
+                }
+                Ok(results
+                    .hits
+                    .into_iter()
+                    .map(|hit| {
+                        let snippet: String = hit
+                            .chunk
+                            .text
+                            .chars()
+                            .take(160)
+                            .collect::<String>()
+                            .replace('\n', " ");
+                        Row {
+                            id: hit.document.id,
+                            title: hit.document.title.clone().into(),
+                            path: hit.document.path.to_string().into(),
+                            snippet: (!snippet.is_empty()).then(|| snippet.into()),
+                        }
+                    })
+                    .collect())
+            })();
+            let _ = sender.send(result);
+        });
+        self.semantic = Some(receiver);
+        self.status = if hybrid {
+            "hybrid search running…".into()
+        } else {
+            "semantic search running…".into()
+        };
+        cx.notify();
+    }
+
+    fn poll_semantic(&mut self, cx: &mut Context<Self>) {
+        let Some(receiver) = &self.semantic else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(rows)) => {
+                self.status = format!("{} semantic match(es)", rows.len()).into();
+                self.rows = rows;
+                self.selected_row = 0;
+                self.semantic = None;
+                cx.notify();
+            }
+            Ok(Err(reason)) => {
+                self.status = format!("semantic search: {reason}").into();
+                self.semantic = None;
+                cx.notify();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.semantic = None;
+            }
+        }
     }
 
     /// Collect a finished ⌘T run, if one is cooking.
@@ -759,6 +859,11 @@ impl Workspace {
             // Enter opens the selected result *and hands it the keyboard* —
             // search, arrive, type; no mouse in between (UI-003).
             EditorEvent::Submitted => {
+                let query = self.search.read(cx).text().trim().to_owned();
+                if let Some(stripped) = query.strip_prefix('?') {
+                    self.run_semantic(stripped.to_owned(), cx);
+                    return;
+                }
                 if self.browsing() {
                     match self.tree.get(self.selected_row).cloned() {
                         Some(TreeRow::Document { id, .. }) => {

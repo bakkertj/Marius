@@ -75,6 +75,10 @@ every platform, since the file is created on the Mac. Three behaviours:
   drawable (GRAPH-014). Assembly (`core::graph`) and the deterministic
   force simulation (`ui-gpui/graph.rs`) are headlessly tested; the canvas
   is the thin part.
+- **Semantic search from the search box**: `?query` + Enter retrieves
+  by meaning, `??query` fuses with keyword rank — both on a worker
+  thread, since the query embedding is a model call. Results land in
+  the ordinary list with the matching passage as the snippet.
 - **The intelligence reaches the desktop**: ⌘T asks the configured
   model for tags on its own worker thread (a second WAL connection; the
   interface never freezes for a model), proposals appear as `~#tag`
