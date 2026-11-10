@@ -84,6 +84,13 @@ pub struct Inline {
     pub spans: Vec<(Range<usize>, SpanStyle)>,
     /// Click targets: byte range in `text` and the raw destination.
     pub links: Vec<(Range<usize>, String)>,
+    /// Set while the inline consists of exactly one `$$…$$` block, so
+    /// the paragraph can hoist it to a display-math block (MD-010).
+    pub sole_math: Option<String>,
+    /// Byte offset of the first soft or hard break, for the callout
+    /// recogniser: the title is the marker's own line, and flattening
+    /// breaks to spaces would otherwise erase that boundary.
+    pub first_break: Option<usize>,
 }
 
 /// A rendered block.
@@ -113,6 +120,14 @@ pub enum Block {
         destination: String,
         alt: String,
     },
+    /// An Obsidian-style callout: `> [!note] Title` (MD-012).
+    Callout {
+        kind: String,
+        title: String,
+        children: Vec<Block>,
+    },
+    /// Display math, `$$…$$`. Shown distinctly, not yet typeset (MD-010).
+    Math(String),
 }
 
 /// One list item: an optional task state and its content blocks.
@@ -128,6 +143,7 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_MATH
         | Options::ENABLE_GFM;
     let mut parser = Parser::new_ext(body, options);
     collect_blocks(&mut parser, None)
@@ -154,6 +170,8 @@ fn collect_blocks(parser: &mut Parser, until: Option<TagEnd>) -> Vec<Block> {
                         destination: dest,
                         alt: inline.text[range].to_owned(),
                     });
+                } else if let Some(source) = inline.sole_math.clone() {
+                    blocks.push(Block::Math(source));
                 } else if !inline.text.trim().is_empty() || !inline.links.is_empty() {
                     blocks.push(Block::Paragraph(inline));
                 }
@@ -176,9 +194,32 @@ fn collect_blocks(parser: &mut Parser, until: Option<TagEnd>) -> Vec<Block> {
                     text: text.trim_end_matches('\n').to_owned(),
                 });
             }
-            Event::Start(Tag::BlockQuote(_)) => {
+            Event::Start(Tag::BlockQuote(kind)) => {
                 let inner = collect_blocks(parser, Some(TagEnd::BlockQuote(None)));
-                blocks.push(Block::Quote(inner));
+                // GFM's own alert set is recognised by the parser and
+                // arrives on the tag; Obsidian's wider set (and titled
+                // callouts) arrive as text for `callout_or_quote`.
+                blocks.push(match kind {
+                    Some(gfm) => {
+                        let kind = match gfm {
+                            pulldown_cmark::BlockQuoteKind::Note => "note",
+                            pulldown_cmark::BlockQuoteKind::Tip => "tip",
+                            pulldown_cmark::BlockQuoteKind::Important => "important",
+                            pulldown_cmark::BlockQuoteKind::Warning => "warning",
+                            pulldown_cmark::BlockQuoteKind::Caution => "caution",
+                        };
+                        let mut title = kind.to_owned();
+                        if let Some(first) = title.get_mut(0..1) {
+                            first.make_ascii_uppercase();
+                        }
+                        Block::Callout {
+                            kind: kind.to_owned(),
+                            title,
+                            children: inner,
+                        }
+                    }
+                    None => callout_or_quote(inner),
+                });
             }
             Event::Start(Tag::List(start)) => {
                 let end = TagEnd::List(start.is_some());
@@ -193,6 +234,9 @@ fn collect_blocks(parser: &mut Parser, until: Option<TagEnd>) -> Vec<Block> {
                     }
                 }
                 blocks.push(Block::List { start, items });
+            }
+            Event::DisplayMath(src) => {
+                blocks.push(Block::Math(src.to_string()));
             }
             Event::Start(Tag::Table(_)) => {
                 blocks.push(collect_table(parser));
@@ -281,6 +325,62 @@ fn collect_table(parser: &mut Parser) -> Block {
     Block::Table { head, rows }
 }
 
+/// `> [!note] Title` and kin become callouts (MD-012); any other quote
+/// stays a quote. The marker must open the quote's first paragraph.
+fn callout_or_quote(mut inner: Vec<Block>) -> Block {
+    let Some(Block::Paragraph(first)) = inner.first_mut() else {
+        return Block::Quote(inner);
+    };
+    let text = first.text.trim_start();
+    let Some(rest) = text.strip_prefix("[!") else {
+        return Block::Quote(inner);
+    };
+    let Some(close) = rest.find(']') else {
+        return Block::Quote(inner);
+    };
+    let kind = rest[..close].trim().to_lowercase();
+    if kind.is_empty() || !kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Block::Quote(inner);
+    }
+    // Title: the remainder of the marker's own line; everything after
+    // the first (recorded) line break stays as content.
+    let marker_offset = first.text.len() - text.len(); // leading trim
+    let after_start = marker_offset + 2 + close + 1;
+    let (title, remainder) = match first.first_break {
+        Some(break_at) if break_at > after_start => (
+            first.text[after_start..break_at].trim().to_owned(),
+            first.text[break_at..].trim_start().to_owned(),
+        ),
+        Some(break_at) => (
+            String::new(),
+            first.text[break_at..].trim_start().to_owned(),
+        ),
+        None => (first.text[after_start..].trim().to_owned(), String::new()),
+    };
+    let title = if title.is_empty() {
+        let mut t = kind.clone();
+        if let Some(first) = t.get_mut(0..1) {
+            first.make_ascii_uppercase();
+        }
+        t
+    } else {
+        title
+    };
+
+    if remainder.is_empty() {
+        inner.remove(0);
+    } else {
+        // Re-parse the remainder so its own emphasis and links survive.
+        let reparsed = parse_blocks(&remainder);
+        inner.splice(0..1, reparsed);
+    }
+    Block::Callout {
+        kind,
+        title,
+        children: inner,
+    }
+}
+
 /// Flatten one block's inline events into text plus styled and linked spans.
 fn collect_inline(parser: &mut Parser, until: TagEnd) -> Inline {
     let mut inline = Inline::default();
@@ -308,6 +408,9 @@ fn append_inline_event(inline: &mut Inline, event: Event, parser: &mut Parser) {
 
     match event {
         Event::Text(t) => {
+            if !t.trim().is_empty() {
+                inline.sole_math = None;
+            }
             let start = inline.text.len();
             inline.text.push_str(&t);
             let style = with_state(|s| *s);
@@ -316,6 +419,30 @@ fn append_inline_event(inline: &mut Inline, event: Event, parser: &mut Parser) {
             }
         }
         Event::Code(t) => {
+            let start = inline.text.len();
+            inline.text.push_str(&t);
+            let mut style = with_state(|s| *s);
+            style.code = true;
+            inline.spans.push((start..inline.text.len(), style));
+        }
+        Event::InlineMath(t) => {
+            // Inline math reads as code until a typesetter exists: the
+            // honest presentation is "distinct and verbatim" (MD-010).
+            inline.sole_math = None;
+            let start = inline.text.len();
+            inline.text.push_str(&t);
+            let mut style = with_state(|s| *s);
+            style.code = true;
+            inline.spans.push((start..inline.text.len(), style));
+        }
+        Event::DisplayMath(t) => {
+            // Alone in its paragraph it becomes a math block; mixed with
+            // prose it degrades to a code-styled span.
+            if inline.text.is_empty() {
+                inline.sole_math = Some(t.to_string());
+            } else {
+                inline.sole_math = None;
+            }
             let start = inline.text.len();
             inline.text.push_str(&t);
             let mut style = with_state(|s| *s);
@@ -369,8 +496,18 @@ fn append_inline_event(inline: &mut Inline, event: Event, parser: &mut Parser) {
                 .links
                 .push((start..inline.text.len(), format!("img:{dest_url}")));
         }
-        Event::SoftBreak => inline.text.push(' '),
-        Event::HardBreak => inline.text.push('\n'),
+        Event::SoftBreak => {
+            if inline.first_break.is_none() {
+                inline.first_break = Some(inline.text.len());
+            }
+            inline.text.push(' ');
+        }
+        Event::HardBreak => {
+            if inline.first_break.is_none() {
+                inline.first_break = Some(inline.text.len());
+            }
+            inline.text.push('\n');
+        }
         Event::FootnoteReference(name) => {
             let start = inline.text.len();
             inline.text.push_str(&format!("[{name}]"));
@@ -753,6 +890,69 @@ impl Preview {
                 .my(px(10.))
                 .h(px(1.))
                 .bg(theme.border)
+                .into_any_element(),
+            Block::Callout {
+                kind,
+                title,
+                children,
+            } => {
+                // Kind → accent colour, mapped onto the theme's own
+                // palette so both appearances stay WCAG-checked.
+                let (icon, colour) = match kind.as_str() {
+                    "warning" | "caution" | "attention" => ("⚠", theme.tag_proposed),
+                    "danger" | "error" | "bug" | "failure" => ("✖", theme.broken_link),
+                    "tip" | "success" | "check" | "done" => ("✔", theme.tag_confirmed),
+                    "question" | "help" | "faq" => ("?", theme.tag_proposed),
+                    "quote" | "cite" => ("❝", theme.muted),
+                    _ => ("ℹ", theme.accent), // note, info, abstract, …
+                };
+                let mut callout = div()
+                    .my(px(6.))
+                    .pl(px(12.))
+                    .pr(px(10.))
+                    .py(px(6.))
+                    .rounded(px(6.))
+                    .border_l_2()
+                    .border_color(colour)
+                    .bg(theme.elevated)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(6.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colour)
+                            .child(icon)
+                            .child(title.clone()),
+                    );
+                for inner in children {
+                    callout = callout.child(self.render_block(index, inner, cx));
+                }
+                callout.into_any_element()
+            }
+            Block::Math(source) => div()
+                .id(("math", id))
+                .my(px(6.))
+                .px(px(12.))
+                .py(px(8.))
+                .rounded(px(6.))
+                .bg(theme.code_background)
+                .border_l_2()
+                .border_color(theme.accent)
+                .overflow_x_scroll()
+                .child(
+                    div()
+                        .text_size(px(10.0 * z))
+                        .text_color(theme.muted)
+                        .child("math — not yet typeset"),
+                )
+                .child(
+                    div()
+                        .font_family(mono_family())
+                        .text_size(px(13.0 * z))
+                        .whitespace_nowrap()
+                        .child(source.clone()),
+                )
                 .into_any_element(),
             Block::Image { destination, alt } => {
                 let clean = destination
@@ -1155,5 +1355,64 @@ mod crash_regressions {
             assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
             cursor = range.end;
         }
+    }
+}
+
+#[cfg(test)]
+mod callout_tests {
+    use super::*;
+
+    #[test]
+    fn an_obsidian_callout_becomes_a_typed_block_with_title() {
+        let blocks =
+            parse_blocks("> [!warning] Shoals ahead\n> The eastern channel silted up in 1869.\n");
+        let [Block::Callout {
+            kind,
+            title,
+            children,
+        }] = blocks.as_slice()
+        else {
+            panic!("expected a callout, got {blocks:?}");
+        };
+        assert_eq!(kind, "warning");
+        assert_eq!(title, "Shoals ahead");
+        let [Block::Paragraph(body)] = children.as_slice() else {
+            panic!("body paragraph expected: {children:?}");
+        };
+        assert!(body.text.contains("eastern channel"));
+    }
+
+    #[test]
+    fn a_titleless_callout_titles_itself_and_plain_quotes_stay_quotes() {
+        let blocks = parse_blocks("> [!tip]\n> Sleep before deciding.\n");
+        let [Block::Callout { kind, title, .. }] = blocks.as_slice() else {
+            panic!("{blocks:?}");
+        };
+        assert_eq!(kind, "tip");
+        assert_eq!(title, "Tip");
+
+        let blocks = parse_blocks("> An ordinary quotation.\n");
+        assert!(matches!(blocks.as_slice(), [Block::Quote(_)]), "{blocks:?}");
+        // A bracketed non-marker stays a quote too.
+        let blocks = parse_blocks("> [!not a marker] because of the space\n");
+        assert!(matches!(blocks.as_slice(), [Block::Quote(_)]), "{blocks:?}");
+    }
+
+    #[test]
+    fn display_and_inline_math_parse_distinctly() {
+        let blocks = parse_blocks("Euler: $e^{i\\pi}+1=0$ in text.\n\n$$\\int_0^1 x\\,dx$$\n");
+        assert!(matches!(blocks.last(), Some(Block::Math(m)) if m.contains("int_0^1")));
+        let [Block::Paragraph(inline), ..] = blocks.as_slice() else {
+            panic!("{blocks:?}");
+        };
+        assert!(inline.text.contains("e^{i\\pi}+1=0"));
+        assert!(
+            inline
+                .spans
+                .iter()
+                .any(|(range, style)| style.code && inline.text[range.clone()].contains("e^")),
+            "inline math styled as code: {:?}",
+            inline.spans
+        );
     }
 }

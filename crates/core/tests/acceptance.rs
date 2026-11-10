@@ -968,3 +968,48 @@ fn kb_003_folder_move_guards() {
     assert_eq!(report.documents_moved, 0);
     assert_eq!(report.from, report.to);
 }
+
+#[test]
+fn md_011_daily_notes_and_templates() {
+    // Daily: created once from the template, then reopened, never
+    // duplicated.
+    let mut h = Harness::new();
+    h.write(
+        "templates/daily.md",
+        "# {{title}}\n\nCaptured {{date}} at {{time}}.\n\n- [ ] review inbox\n",
+    );
+    h.index();
+
+    let vault = h.vault.clone();
+    let first = h.app.daily_note(&vault).unwrap();
+    assert!(first.path.as_str().starts_with("daily/"));
+    let text = h.read(first.path.as_str());
+    assert!(text.contains("- [ ] review inbox"));
+    assert!(text.contains("Captured 2"), "{text}");
+    assert!(!text.contains("{{date}}"));
+
+    let second = h.app.daily_note(&vault).unwrap();
+    assert_eq!(second.id, first.id, "one daily note per day");
+
+    // Templates list + create-from-template.
+    h.write(
+        "templates/meeting.md",
+        "# {{title}}\n\nAgenda ({{date}}):\n",
+    );
+    h.index();
+    assert_eq!(h.app.templates(&vault), vec!["daily", "meeting"]);
+
+    let path = VaultPath::new("meetings/Harbour sync.md").unwrap();
+    let note = h.app.new_from_template(&vault, "meeting", &path).unwrap();
+    assert_eq!(note.title, "Harbour sync");
+    let text = h.read("meetings/Harbour sync.md");
+    assert!(text.starts_with("# Harbour sync"));
+    assert!(text.contains("Agenda (2"));
+
+    // A missing template is an explanation, not a crash.
+    let error = h
+        .app
+        .new_from_template(&vault, "retro", &VaultPath::new("r.md").unwrap())
+        .unwrap_err();
+    assert!(error.to_string().contains("no template \"retro\""));
+}

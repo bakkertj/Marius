@@ -2328,6 +2328,74 @@ impl Marius {
         Ok(inference::recent(self.db.conn(), limit)?)
     }
 
+    // -------------------------------------------- templates and dailies
+
+    /// Open — creating if needed — today's daily note (MD-011).
+    ///
+    /// `{templates_folder}/daily.md` seeds the body when it exists;
+    /// placeholders `{{date}}`, `{{time}}` and `{{title}}` expand.
+    /// Idempotent: the second call today returns the same note.
+    pub fn daily_note(&mut self, vault: &Vault) -> Result<Document> {
+        let now = OffsetDateTime::now_utc();
+        let name = crate::templates::daily_name(now);
+        let path = VaultPath::new(format!("{}/{name}", self.config.daily_folder))
+            .map_err(|e| CoreError::Inference(e.to_string()))?;
+        if let Some(existing) = self.document_at(vault.id, &path)? {
+            return Ok(existing);
+        }
+        let title = name.trim_end_matches(".md").to_owned();
+        let template_path = vault
+            .root
+            .join(&self.config.templates_folder)
+            .join("daily.md");
+        let body = match std::fs::read_to_string(&template_path) {
+            Ok(template) => crate::templates::expand(&template, &title, now),
+            Err(_) => format!("# {title}\n\n"),
+        };
+        self.create_document(vault, &path, &body)
+    }
+
+    /// Templates available in this vault: the stems of the Markdown
+    /// files in the templates folder.
+    pub fn templates(&self, vault: &Vault) -> Vec<String> {
+        let dir = vault.root.join(&self.config.templates_folder);
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.strip_suffix(".md").map(str::to_owned)
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Create a note from a template (MD-011): placeholders expanded,
+    /// the file placed at `path`.
+    pub fn new_from_template(
+        &mut self,
+        vault: &Vault,
+        template: &str,
+        path: &VaultPath,
+    ) -> Result<Document> {
+        let template_path = vault
+            .root
+            .join(&self.config.templates_folder)
+            .join(format!("{template}.md"));
+        let body = std::fs::read_to_string(&template_path).map_err(|e| {
+            CoreError::Inference(format!(
+                "no template {template:?} in {}/: {e}",
+                self.config.templates_folder
+            ))
+        })?;
+        let title = path.file_stem().to_owned();
+        let body = crate::templates::expand(&body, &title, OffsetDateTime::now_utc());
+        self.create_document(vault, path, &body)
+    }
+
     // ------------------------------------------------------- importing
 
     /// Import an external file into the vault (IM-001/002/008/009/011).

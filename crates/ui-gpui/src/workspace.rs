@@ -99,6 +99,8 @@ struct PaletteItem {
 #[derive(Clone)]
 enum PaletteAction {
     NewNote,
+    DailyNote,
+    NewFromTemplate(String),
     Reindex,
     ToggleReading,
     ToggleSplit,
@@ -305,6 +307,8 @@ pub struct Workspace {
     palette_selected: usize,
     /// The backlinks/related side panel (⌘B, UI-005): refreshed when
     /// the open document changes, not per frame.
+    /// Template staged by the palette for the next ⌘N (MD-011).
+    pending_template: Option<String>,
     backlinks_open: bool,
     neighbourhood: Option<marius_core::Neighbourhood>,
     /// Shared-tag kinship resolved to titles, for the panel.
@@ -407,6 +411,7 @@ impl Workspace {
             palette_input,
             palette_items: None,
             palette_selected: 0,
+            pending_template: None,
             backlinks_open: false,
             neighbourhood: None,
             kin_titles: Vec::new(),
@@ -901,9 +906,19 @@ impl Workspace {
         // The heading is the note's name, not its address: a note filed under
         // `research/ideas/` is still titled by its leaf.
         let title = name.rsplit('/').next().unwrap_or(&name);
-        let body = format!("# {title}\n\n");
         let vault = self.vault.clone();
-        let created = self.app.borrow_mut().create_document(&vault, &path, &body);
+        let created = match self.pending_template.take() {
+            // Palette-staged template (MD-011): its body, placeholders
+            // expanded, instead of the bare heading.
+            Some(template) => self
+                .app
+                .borrow_mut()
+                .new_from_template(&vault, &template, &path),
+            None => {
+                let body = format!("# {title}\n\n");
+                self.app.borrow_mut().create_document(&vault, &path, &body)
+            }
+        };
         match created {
             Ok(document) => {
                 self.search.update(cx, |s, cx| s.set_text("", cx));
@@ -1058,6 +1073,7 @@ impl Workspace {
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut items = vec![
             ("New note", PaletteAction::NewNote),
+            ("Open today's daily note", PaletteAction::DailyNote),
             ("Save document", PaletteAction::Save),
             ("Suggest tags for this note", PaletteAction::SuggestTags),
             ("Toggle reading view", PaletteAction::ToggleReading),
@@ -1075,6 +1091,14 @@ impl Workspace {
             action,
         })
         .collect::<Vec<_>>();
+
+        // One entry per template in the vault's templates folder.
+        for template in self.app.borrow().templates(&self.vault) {
+            items.push(PaletteItem {
+                label: format!("New from template: {template}").into(),
+                action: PaletteAction::NewFromTemplate(template),
+            });
+        }
 
         // Plugin commands: enabled plugins only, loaded without
         // capabilities — enumeration must not grant anything.
@@ -1166,6 +1190,26 @@ impl Workspace {
     ) {
         match action {
             PaletteAction::NewNote => self.new_note(window, cx),
+            PaletteAction::DailyNote => {
+                let vault = self.vault.clone();
+                let result = self.app.borrow_mut().daily_note(&vault);
+                match result {
+                    Ok(note) => {
+                        self.rebuild_tree(cx);
+                        self.open(note.id, cx);
+                        let handle = self.editor.read(cx).focus_handle(cx);
+                        window.focus(&handle);
+                    }
+                    Err(error) => self.status = format!("daily: {error}").into(),
+                }
+                cx.notify();
+            }
+            PaletteAction::NewFromTemplate(template) => {
+                // The template seeds the note the ⌘N box then names:
+                // reuse the search-box flow with the template body staged.
+                self.pending_template = Some(template);
+                self.new_note(window, cx);
+            }
             PaletteAction::Save => self.autosave(cx),
             PaletteAction::SuggestTags => self.suggest_tags(cx),
             PaletteAction::ToggleReading => self.on_toggle_reading(&ToggleReading, window, cx),

@@ -205,6 +205,16 @@ enum Command {
         /// Initial body. Reads standard input when omitted.
         #[arg(long)]
         body: Option<String>,
+        /// Seed the note from `templates/<name>.md`, with {{date}},
+        /// {{time}} and {{title}} expanded (MD-011).
+        #[arg(long)]
+        template: Option<String>,
+    },
+
+    /// Open (creating if needed) today's daily note (MD-011).
+    Daily {
+        /// Vault name. Omit when exactly one vault is open.
+        vault: Option<String>,
     },
 
     /// Rename a document, updating the links that point at it.
@@ -824,14 +834,29 @@ fn run(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
-        Command::New { document, body } => {
+        Command::New {
+            document,
+            body,
+            template,
+        } => {
             let (vault, path) = DocumentRef::parse_new(&app, document)?;
-            let body = match body {
-                Some(body) => format!("{body}\n"),
-                None => read_stdin()?,
+            let created = match template {
+                Some(template) => app.new_from_template(&vault, template, &path)?,
+                None => {
+                    let body = match body {
+                        Some(body) => format!("{body}\n"),
+                        None => read_stdin()?,
+                    };
+                    app.create_document(&vault, &path, &body)?
+                }
             };
-            let created = app.create_document(&vault, &path, &body)?;
             render::created(&created, &vault.name, cli.json);
+            Ok(())
+        }
+        Command::Daily { vault } => {
+            let vault = one_vault(&app, vault.as_deref())?;
+            let note = app.daily_note(&vault)?;
+            println!("{}", note.path);
             Ok(())
         }
         Command::Rename { document, new_name } => {

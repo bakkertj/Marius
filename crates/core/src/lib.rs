@@ -4,6 +4,7 @@ pub mod graph;
 pub mod plugins;
 pub mod search;
 pub mod sync_client;
+pub mod templates;
 
 pub use app::{
     CoreError, ExternalReport, FolderMoveReport, MaintenanceReport, Marius, Neighbourhood,

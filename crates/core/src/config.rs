@@ -134,6 +134,12 @@ pub struct Config {
     /// up recovery, it does not merely economise.
     #[serde(default = "default_revision_body_kib")]
     pub revision_body_limit_kib: u64,
+    /// Folder for daily notes (MD-011), relative to each vault root.
+    #[serde(default = "default_daily_folder")]
+    pub daily_folder: String,
+    /// Folder holding note templates, relative to each vault root.
+    #[serde(default = "default_templates_folder")]
+    pub templates_folder: String,
     /// Days of acknowledged journal history to keep. `0` keeps everything.
     ///
     /// The journal is the replication queue and the audit trail (SEC-006).
@@ -147,6 +153,14 @@ pub struct Config {
 
 fn default_revision_body_kib() -> u64 {
     256
+}
+
+fn default_daily_folder() -> String {
+    "daily".to_owned()
+}
+
+fn default_templates_folder() -> String {
+    "templates".to_owned()
 }
 
 fn default_journal_retention_days() -> u32 {
@@ -166,6 +180,8 @@ impl Default for Config {
             cross_vault_links: false,
             chunk_on_index: false,
             record_revisions: true,
+            daily_folder: default_daily_folder(),
+            templates_folder: default_templates_folder(),
             revision_body_limit_kib: default_revision_body_kib(),
             journal_retention_days: default_journal_retention_days(),
         }

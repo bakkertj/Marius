@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **139 done, 23 partial, 7 ready, 25 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **141 done, 22 partial, 7 ready, 24 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -69,9 +69,9 @@ Totals of 194 requirement IDs: **139 done, 23 partial, 7 ready, 25 open**. Every
 | MD-007 | done | `markdown::rewrite`, `core::relocate`, `resolve_pending_links` | `ac_003_renaming_a_linked_document_keeps_identity_and_fixes_links` |
 | MD-008 | done | `markdown::frontmatter` | `unknown_keys_are_kept_and_reported`, recovery tests |
 | MD-009 | done | `highlight.rs` | Same scanner as the indexer; code/fences/math excluded correctly. |
-| MD-010 | partial | `scan` math masking, `text` | Parsed and indexed, not rendered. |
-| MD-011 | partial | `markdown::outline` | Outline done; templates, daily notes, panes need the UI. |
-| MD-012 | partial | `preview.rs` | Quotes, tables, task lists render; Obsidian callout styling pending. |
+| MD-010 | partial | `ENABLE_MATH`, `Block::Math`, mermaid-labelled code | Math parses and renders distinctly (badged, sideways-scrolling, not yet typeset); Mermaid shows as labelled source. True typesetting/diagramming remain. |
+| MD-011 | partial | `templates.rs`, `daily_note`, `marius daily`, `--template`, palette | Templates, daily notes, outline and the editor/preview split done (`md_011_daily_notes_and_templates`); multiple tabs remain. |
+| MD-012 | done | `Block::Callout`, GFM alerts + Obsidian markers | `an_obsidian_callout_becomes_a_typed_block_with_title`; kinds map onto the WCAG-checked palette. |
 | MD-013 | open | — | Needs the UI. |
 | MD-014 | open | — | P2. |
 
@@ -222,8 +222,8 @@ Totals of 194 requirement IDs: **139 done, 23 partial, 7 ready, 25 open**. Every
 | UI-002 | done | `workspace.rs`, `tree.rs` | Folder-tree explorer with fold/unfold, search (⌘K), editor, tag browser, properties strip. |
 | UI-003 | done | `editor::key_bindings`, `workspace` | ⌘K/⌘N/⌘S/⌘⇧L, Esc loop, arrows in list, full editor keys. |
 | UI-004 | done | `theme.rs` | Both appearances, WCAG-contrast asserted by test, live toggle. |
-| UI-005 | partial | `core::neighbourhood`, `marius graph` | Backlinks and related notes available; views need the UI. |
-| UI-006 | open | — | Needs the UI. |
+| UI-005 | done | ⌘G graph, ⌘B backlinks/related panel, ⌘T + chips | Graph, AI-assistant surface, related notes and backlinks all in the desktop app. |
+| UI-006 | partial | ⌘⇧P palette (`palette.rs`), editor/preview split | Command palette done; tabs and saved workspaces remain. |
 | UI-007 | open | — | Phase 7. |
 | UI-008 | done | crate graph | `model` has no I/O; `core` has no UI assumption. |
 | UI-009 | open | — | Needs the UI. |
