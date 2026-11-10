@@ -64,6 +64,19 @@ enum Command {
     /// Drop and rebuild every derived index, keeping all metadata.
     Rebuild,
 
+    /// Import external files: Markdown, text, HTML, .eml, .mbox
+    /// (IM-008/009/011). Everything indexes immediately.
+    Import {
+        /// Files to import.
+        files: Vec<PathBuf>,
+        /// Vault name. Omit when exactly one vault is open.
+        #[arg(long)]
+        vault: Option<String>,
+        /// Folder inside the vault to import into.
+        #[arg(long)]
+        folder: Option<String>,
+    },
+
     /// Write a synthesis note from one or more source notes (AI-011).
     /// Regenerating replaces the note in place only while nobody has
     /// edited it; afterwards a sibling is written instead (AC-010).
@@ -422,6 +435,35 @@ fn run(cli: &Cli) -> Result<()> {
             Ok(())
         }
         Command::Watch { vault, debounce } => watch_command(&mut app, vault.as_deref(), *debounce),
+        Command::Import {
+            files,
+            vault,
+            folder,
+        } => {
+            if files.is_empty() {
+                anyhow::bail!("nothing to import");
+            }
+            let vault = one_vault(&app, vault.as_deref())?;
+            let folder = folder
+                .as_deref()
+                .map(marius_model::VaultPath::new)
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            for file in files {
+                let report = app.import_file(&vault, file, folder.as_ref())?;
+                for document in &report.imported {
+                    println!("imported {}", document.path);
+                }
+                if report.skipped > 0 {
+                    println!(
+                        "{}: {} message(s) could not be parsed and were skipped",
+                        file.display(),
+                        report.skipped
+                    );
+                }
+            }
+            Ok(())
+        }
         Command::Summarize { documents, out } => {
             let mut ids = Vec::new();
             for reference in documents {

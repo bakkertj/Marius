@@ -4,7 +4,7 @@ What works today, what is designed but not built, and what is next. Precise
 per-requirement status is in [TRACEABILITY.md](TRACEABILITY.md), which is
 checked against the specification on every `cargo test`.
 
-**As of this writing: 692 tests (612 core + 80 UI), zero clippy warnings, formatted.**
+**As of this writing: 705 tests (625 core + 80 UI), zero clippy warnings, formatted.**
 
 ## Platform position
 
@@ -175,6 +175,12 @@ line.
   judge each with a one-sentence rationale stored on the edge; proposals
   arrive unreviewed for `marius link confirm/reject`, and a rejected pair
   is never re-proposed. Every request audited, policy-gated per source.
+- **Importers** — `marius import` takes Markdown, plain text, HTML
+  (converted, title and source in frontmatter), `.eml` (headers become
+  frontmatter, attachments land beside the note) and `.mbox` (one note
+  per message, thread identifiers kept). Names are made Windows-portable
+  on the way in, collisions get numbered variants, everything indexes
+  immediately. PDF and Word extraction remain open.
 
 ## Designed and stored for, but not built
 

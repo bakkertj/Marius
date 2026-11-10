@@ -2302,6 +2302,130 @@ impl Marius {
         Ok(inference::recent(self.db.conn(), limit)?)
     }
 
+    // ------------------------------------------------------- importing
+
+    /// Import an external file into the vault (IM-001/002/008/009/011).
+    ///
+    /// Markdown and plain text are copied as they are; HTML is converted;
+    /// `.eml` becomes one note (attachments placed beside it); `.mbox`
+    /// becomes one note per message. Everything indexes immediately
+    /// (IM-005), names are made portable, and an occupied name gets a
+    /// numbered variant rather than an overwrite (IM-003's
+    /// non-destructive instinct).
+    pub fn import_file(
+        &mut self,
+        vault: &Vault,
+        source: &Path,
+        folder: Option<&VaultPath>,
+    ) -> Result<ImportReport> {
+        let bytes = std::fs::read(source)
+            .map_err(|e| CoreError::Inference(format!("cannot read {}: {e}", source.display())))?;
+        let stem = source
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "import".to_owned());
+        let extension = source
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+
+        let mut notes: Vec<marius_import::ImportedNote> = Vec::new();
+        let mut skipped = 0usize;
+        match extension.as_str() {
+            "md" | "markdown" | "txt" => {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let name = source
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| format!("{stem}.md"));
+                notes.push(marius_import::ImportedNote {
+                    file_name: name,
+                    body: text,
+                    attachments: Vec::new(),
+                });
+            }
+            "html" | "htm" => {
+                let html = String::from_utf8_lossy(&bytes);
+                notes.push(
+                    marius_import::html::import(&html, &stem, Some(&source.display().to_string()))
+                        .map_err(|e| CoreError::Inference(e.to_string()))?,
+                );
+            }
+            "eml" => {
+                notes.push(
+                    marius_import::email::import_eml(&bytes)
+                        .map_err(|e| CoreError::Inference(e.to_string()))?,
+                );
+            }
+            "mbox" => {
+                let (parsed, failed) = marius_import::email::import_mbox(&bytes);
+                skipped = failed;
+                notes.extend(parsed);
+            }
+            other => {
+                return Err(CoreError::Inference(format!(
+                    "no importer for .{other} (markdown, txt, html, eml, mbox)"
+                )));
+            }
+        }
+
+        let mut report = ImportReport {
+            skipped,
+            ..ImportReport::default()
+        };
+        for note in notes {
+            let document = self.place_imported(vault, folder, &note)?;
+            report.imported.push(document);
+        }
+        Ok(report)
+    }
+
+    fn place_imported(
+        &mut self,
+        vault: &Vault,
+        folder: Option<&VaultPath>,
+        note: &marius_import::ImportedNote,
+    ) -> Result<Document> {
+        let base = marius_model::sanitize(&note.file_name);
+        let base = if base.to_lowercase().ends_with(".md") {
+            base
+        } else {
+            format!("{base}.md")
+        };
+        let joined = |name: &str| -> Result<VaultPath> {
+            let relative = match folder {
+                Some(folder) => format!("{folder}/{name}"),
+                None => name.to_owned(),
+            };
+            VaultPath::new(relative).map_err(|e| CoreError::Inference(e.to_string()))
+        };
+
+        // Find a free name: "x.md", then "x (imported 2).md", …
+        let mut path = joined(&base)?;
+        let mut counter = 1usize;
+        while self.document_at(vault.id, &path)?.is_some() || path.to_fs(&vault.root).exists() {
+            counter += 1;
+            let stem = base.trim_end_matches(".md");
+            path = joined(&format!("{stem} (imported {counter}).md"))?;
+        }
+
+        let document = self.create_document(vault, &path, &note.body)?;
+
+        // Attachments beside the note, under "<stem> attachments/".
+        if !note.attachments.is_empty() {
+            let stem = path.as_str().trim_end_matches(".md").to_owned();
+            let options = self.index_options(vault)?;
+            for attachment in &note.attachments {
+                let name = marius_model::sanitize(&attachment.file_name);
+                let target = VaultPath::new(format!("{stem} attachments/{name}"))
+                    .map_err(|e| CoreError::Inference(e.to_string()))?;
+                files::write_atomic_bytes(&target.to_fs(&vault.root), &attachment.bytes)?;
+                indexer::index_path(&mut self.db, vault, &target, &options)?;
+            }
+        }
+        Ok(document)
+    }
+
     // ----------------------------------------------------- housekeeping
 
     /// Documents whose filenames will not open on Windows.
@@ -2552,6 +2676,15 @@ impl SemanticResults {
             refusal: Some(reason),
         }
     }
+}
+
+/// What one import produced (IM-005: everything already indexed).
+#[derive(Debug, Default)]
+pub struct ImportReport {
+    pub imported: Vec<Document>,
+    /// Messages in an archive that could not be parsed. Counted, named in
+    /// the CLI output, never silently dropped.
+    pub skipped: usize,
 }
 
 /// What `apply_external_changes` did.

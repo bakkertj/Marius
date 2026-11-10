@@ -1,18 +1,61 @@
-//! # Importers for formats that are not Markdown
+//! # Importers
 //!
-//! Extracts searchable text and metadata from PDF, HTML, Word, `.eml` and
-//! `.mbox` sources.
+//! Turn content from outside the vault into ordinary Markdown notes
+//! (IM-008 HTML, IM-009 `.eml`, IM-011 `.mbox`). An importer is a pure
+//! function from bytes to [`ImportedNote`]s; writing files, indexing and
+//! collision handling belong to `marius-core`, which is also where IM-005
+//! (index on import) happens for free.
 //!
-//! Requirements: IM-008, IM-009, IM-011, IM-012.
-//!
-//! Not yet implemented. Markdown, plain text and pasted email already work
-//! without an importer, because a vault is opened in place rather than
-//! converted (KB-002, AC-001, AC-002) — which is also why there is no
-//! "import an Obsidian vault" step to write. `marius_model::DocumentKind`
-//! already distinguishes the kinds, and `marius-indexing` already indexes
-//! non-text files by name and metadata without reading them (KB-013).
-//!
-//! See `docs/STATUS.md` for what is built and `docs/TRACEABILITY.md` for the
-//! per-requirement position.
+//! The principle throughout: imported metadata lands in frontmatter,
+//! where the indexer already treats it as user-authored (IM-004,
+//! `Provenance::Imported`), and nothing of the original is silently
+//! dropped — what cannot be converted is named, not discarded.
 
 #![forbid(unsafe_code)]
+
+pub mod email;
+pub mod html;
+
+/// One note ready to be written into a vault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedNote {
+    /// Suggested file name (no directories), not yet sanitised for
+    /// Windows — the core applies `marius_model::sanitize` when it
+    /// places the file.
+    pub file_name: String,
+    /// Complete file content, frontmatter included.
+    pub body: String,
+    /// Binary attachments to place beside the note (IM-009).
+    pub attachments: Vec<Attachment>,
+}
+
+/// A file carried by an import (an email attachment, typically).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ImportError {
+    #[error("cannot parse the message")]
+    UnparseableMessage,
+    #[error("cannot convert the HTML: {0}")]
+    Html(String),
+}
+
+/// Escape a string for a double-quoted YAML scalar.
+fn yaml_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}

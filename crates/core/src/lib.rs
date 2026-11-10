@@ -9,7 +9,8 @@ pub use app::{
     RenameReport, SuggestedTags,
 };
 pub use app::{
-    DiscoveryReport, EmbedReport, GroundedAnswer, SemanticHit, SemanticResults, Summarized,
+    DiscoveryReport, EmbedReport, GroundedAnswer, ImportReport, SemanticHit, SemanticResults,
+    Summarized,
 };
 pub use config::{Config, ConfigError};
 pub use graph::{EdgeStyle, GraphData, GraphEdge, GraphNode, GraphOptions};

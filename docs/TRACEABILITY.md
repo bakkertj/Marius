@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **131 done, 22 partial, 9 ready, 32 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **133 done, 23 partial, 9 ready, 29 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -86,10 +86,10 @@ Totals of 194 requirement IDs: **131 done, 22 partial, 9 ready, 32 open**. Every
 | IM-005 | done | `core::create_document` → `index_path` | `indexing_a_single_path_works_for_a_watcher` |
 | IM-006 | done | `DocumentKind::Email`, open-in-place | `ac_011_a_pasted_email_becomes_ordinary_knowledge` |
 | IM-007 | done | `scan::DEFAULT_IGNORED_DIRS`, aliases, wiki links | `ac_002_an_obsidian_style_vault_opens_without_conversion` |
-| IM-008 | open | `crates/import` | PDF/HTML/Word extraction not built. |
-| IM-009 | open | `crates/import` | `.eml` parsing not built; kind is modelled. |
+| IM-008 | partial | `import::html`, `marius import` | HTML done (`an_html_page_arrives_as_a_searchable_markdown_note`); PDF and Word extraction remain. |
+| IM-009 | done | `import::email`, `marius import` | `an_eml_lands_with_headers_in_frontmatter_and_attachments_beside_it` |
 | IM-010 | partial | `indexing::watch`, `apply_external_changes`, `marius watch` | Watched folders done (GUI polls, CLI command, rename keeps identity — `core/tests/watch.rs`). Drag-in from Finder and clipboard capture remain. |
-| IM-011 | open | `crates/import` | `.mbox` not built. |
+| IM-011 | done | `import::email::import_mbox` | `an_mbox_becomes_one_note_per_message_with_thread_identifiers` — message_id/in_reply_to kept. |
 | IM-012 | open | — | P2. |
 
 ## 3.4 Tags and metadata

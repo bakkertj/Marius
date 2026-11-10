@@ -143,6 +143,11 @@ fn blake3_hasher() -> blake3::Hasher {
 /// rename can be durable while the contents are not; without the directory
 /// fsync the rename itself can be lost on some filesystems.
 pub fn write_atomic(path: &Path, text: &str) -> Result<ContentHash, FileError> {
+    write_atomic_bytes(path, text.as_bytes())
+}
+
+/// [`write_atomic`] for binary content — imported attachments, mostly.
+pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<ContentHash, FileError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|source| FileError::Write {
         path: parent.to_path_buf(),
@@ -157,7 +162,7 @@ pub fn write_atomic(path: &Path, text: &str) -> Result<ContentHash, FileError> {
             path: temp.clone(),
             source,
         })?;
-        file.write_all(text.as_bytes())
+        file.write_all(bytes)
             .and_then(|()| file.flush())
             .and_then(|()| file.sync_all())
             .map_err(|source| {
@@ -185,7 +190,7 @@ pub fn write_atomic(path: &Path, text: &str) -> Result<ContentHash, FileError> {
         }
     }
 
-    Ok(ContentHash::of(text.as_bytes()))
+    Ok(ContentHash::of(bytes))
 }
 
 /// Create a file, refusing to overwrite an existing one (KB-003).

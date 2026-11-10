@@ -5,5 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Importers: HTML, .eml and .mbox into Markdown notes"
 
 [dependencies]
+marius-model = { workspace = true }
+htmd = { workspace = true }
+mail-parser = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
