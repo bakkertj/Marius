@@ -44,7 +44,8 @@ actions!(
         ZoomIn,
         ZoomOut,
         ZoomReset,
-        OpenPalette
+        OpenPalette,
+        ToggleBacklinks
     ]
 );
 
@@ -81,6 +82,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-0")), ZoomReset, None),
         // The command palette (UI-006): every action, one keystroke away.
         KeyBinding::new(key(format!("{primary}-shift-p")), OpenPalette, None),
+        // Backlinks and related notes for the open document (UI-005).
+        KeyBinding::new(key(format!("{primary}-b")), ToggleBacklinks, None),
         // The knowledge graph (GRAPH-001).
         KeyBinding::new(key(format!("{primary}-g")), ToggleGraph, None),
     ]
@@ -300,6 +303,12 @@ pub struct Workspace {
     palette_input: Entity<Editor>,
     palette_items: Option<Vec<PaletteItem>>,
     palette_selected: usize,
+    /// The backlinks/related side panel (⌘B, UI-005): refreshed when
+    /// the open document changes, not per frame.
+    backlinks_open: bool,
+    neighbourhood: Option<marius_core::Neighbourhood>,
+    /// Shared-tag kinship resolved to titles, for the panel.
+    kin_titles: Vec<(DocumentId, SharedString, u64)>,
     /// Debounced filesystem watcher (IM-010); `None` when the platform
     /// refused one, in which case ⌘R stays the manual fallback.
     watcher: Option<VaultWatcher>,
@@ -398,6 +407,9 @@ impl Workspace {
             palette_input,
             palette_items: None,
             palette_selected: 0,
+            backlinks_open: false,
+            neighbourhood: None,
+            kin_titles: Vec::new(),
             watcher,
             focus_handle: cx.focus_handle(),
         };
@@ -571,6 +583,29 @@ impl Workspace {
             }
         }
         self.open_provenance = app.note_provenance(id).ok().flatten();
+        drop(app);
+        self.refresh_neighbourhood();
+    }
+
+    /// The open document's connections, for the ⌘B panel (UI-005).
+    fn refresh_neighbourhood(&mut self) {
+        self.neighbourhood = None;
+        self.kin_titles.clear();
+        if !self.backlinks_open {
+            return;
+        }
+        let Some(id) = self.open_document else { return };
+        let app = self.app.borrow();
+        let Ok(neighbourhood) = app.neighbourhood(id) else {
+            return;
+        };
+        for kin in &neighbourhood.shared_tags {
+            if let Ok(document) = app.document(kin.document.document) {
+                self.kin_titles
+                    .push((document.id, document.title.clone().into(), kin.shared_tags));
+            }
+        }
+        self.neighbourhood = Some(neighbourhood);
     }
 
     /// Rebuild the explorer rows after a collapse toggle, without touching
@@ -1768,6 +1803,135 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The ⌘B side panel (UI-005): backlinks, outgoing links, co-tag
+    /// kin and unresolved targets for the open document, each row a
+    /// click away.
+    fn render_backlinks(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.backlinks_open {
+            return None;
+        }
+        let theme = self.theme;
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .w(px(250.))
+            .h_full()
+            .flex_none()
+            .border_l_1()
+            .border_color(theme.border)
+            .bg(theme.surface)
+            .overflow_hidden()
+            .text_size(px(12.));
+
+        let heading = |label: &str| {
+            div()
+                .px(px(12.))
+                .pt(px(10.))
+                .pb(px(2.))
+                .text_size(px(10.))
+                .text_color(theme.muted)
+                .child(label.to_uppercase())
+        };
+        fn doc_row(
+            theme: &Theme,
+            index: usize,
+            id: DocumentId,
+            label: SharedString,
+            cx: &mut Context<Workspace>,
+        ) -> gpui::Stateful<gpui::Div> {
+            let hover_bg = theme.hover;
+            div()
+                .id(("bl-row", index))
+                .px(px(12.))
+                .py(px(3.))
+                .hover(move |d| d.bg(hover_bg))
+                .cursor_pointer()
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| this.open(id, cx)))
+        }
+        let mut row_index = 0usize;
+
+        let Some(neighbourhood) = &self.neighbourhood else {
+            panel = panel.child(heading("related")).child(
+                div()
+                    .px(px(12.))
+                    .py(px(4.))
+                    .text_color(theme.muted)
+                    .child("no document open"),
+            );
+            return Some(panel.into_any_element());
+        };
+
+        let resolve =
+            |global: &marius_model::GlobalDocumentId| -> Option<(DocumentId, SharedString)> {
+                let app = self.app.borrow();
+                app.document(global.document)
+                    .ok()
+                    .map(|d| (d.id, d.title.into()))
+            };
+
+        // Backlinks: what points here (GRAPH-002's other half).
+        let incoming: Vec<_> = neighbourhood
+            .incoming
+            .iter()
+            .filter_map(|edge| resolve(&edge.endpoints.source))
+            .collect();
+        panel = panel.child(heading(&format!("backlinks ({})", incoming.len())));
+        if incoming.is_empty() {
+            panel = panel.child(
+                div()
+                    .px(px(12.))
+                    .py(px(3.))
+                    .text_color(theme.muted)
+                    .child("nothing links here yet"),
+            );
+        }
+        for (id, label) in incoming {
+            row_index += 1;
+            panel = panel.child(doc_row(&theme, row_index, id, label, cx));
+        }
+
+        // Outgoing links.
+        let outgoing: Vec<_> = neighbourhood
+            .outgoing
+            .iter()
+            .filter_map(|edge| resolve(&edge.endpoints.target))
+            .collect();
+        if !outgoing.is_empty() {
+            panel = panel.child(heading(&format!("links to ({})", outgoing.len())));
+            for (id, label) in outgoing {
+                row_index += 1;
+                panel = panel.child(doc_row(&theme, row_index, id, label, cx));
+            }
+        }
+
+        // Related by shared tags (GRAPH-003).
+        if !self.kin_titles.is_empty() {
+            panel = panel.child(heading("related by tags"));
+            for (id, title, shared) in self.kin_titles.clone() {
+                row_index += 1;
+                let label: SharedString = format!("{title}  ·{shared}").into();
+                panel = panel.child(doc_row(&theme, row_index, id, label, cx));
+            }
+        }
+
+        // Links that point at nothing yet (MD-007).
+        if !neighbourhood.unresolved.is_empty() {
+            panel = panel.child(heading("unresolved"));
+            for target in &neighbourhood.unresolved {
+                panel = panel.child(
+                    div()
+                        .px(px(12.))
+                        .py(px(3.))
+                        .text_color(theme.broken_link)
+                        .child(format!("[[{target}]]")),
+                );
+            }
+        }
+
+        Some(panel.into_any_element())
+    }
+
     /// The palette overlay (UI-006), when open: input on top, ranked
     /// matches below, Enter or click to run, Escape to dismiss.
     fn render_palette(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -1912,6 +2076,11 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleBacklinks, _w, cx| {
+                this.backlinks_open = !this.backlinks_open;
+                this.refresh_neighbourhood();
+                cx.notify();
+            }))
             .on_action(cx.listener(Self::on_toggle_graph))
             .on_action(cx.listener(|this, _: &NewNote, window, cx| this.new_note(window, cx)))
             .on_action(cx.listener(|this, _: &ReindexVault, _w, cx| this.reindex(cx)))
@@ -1970,7 +2139,8 @@ impl Render for Workspace {
                                         ViewMode::Graph => self.graph.clone().into_any_element(),
                                     }),
                             ),
-                    ),
+                    )
+                    .children(self.render_backlinks(cx)),
             )
             .child(self.render_status(cx))
             .children(self.render_palette(cx))
