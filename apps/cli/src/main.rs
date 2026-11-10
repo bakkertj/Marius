@@ -106,6 +106,10 @@ enum Command {
     #[command(subcommand)]
     Link(LinkCommand),
 
+    /// Install, trust and run JavaScript plugins (PLUG-001..010).
+    #[command(subcommand)]
+    Plugin(PluginCommand),
+
     /// Replicate a vault against its configured backend: pull, apply,
     /// push (SYNC-004..011). `MARIUS_SYNC_TOKEN` supplies the bearer
     /// secret when the server requires one.
@@ -337,6 +341,49 @@ enum LinkCommand {
         target: String,
         #[arg(long)]
         reason: Option<String>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum PluginCommand {
+    /// Register a plugin directory (manifest.json + main.js). It arrives
+    /// disabled with no capabilities.
+    Install {
+        dir: PathBuf,
+    },
+    /// Installed plugins, their state and grants.
+    List,
+    /// Allow the plugin to run.
+    Enable {
+        plugin: String,
+    },
+    Disable {
+        plugin: String,
+    },
+    /// Grant one capability: read_vault, write_vault, file_system,
+    /// network, secrets, inference, commands, ui.
+    Grant {
+        plugin: String,
+        capability: String,
+    },
+    Revoke {
+        plugin: String,
+        capability: String,
+    },
+    /// The commands a plugin offers.
+    Commands {
+        plugin: String,
+    },
+    /// Run one plugin command against a vault.
+    Run {
+        plugin: String,
+        command: String,
+        #[arg(long)]
+        vault: Option<String>,
+    },
+    /// Forget a plugin. Its directory is left alone.
+    Remove {
+        plugin: String,
     },
 }
 
@@ -586,6 +633,7 @@ fn run(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
+        Command::Plugin(command) => plugin_command(app, command, cli.json),
         Command::Sync { vault, status } => {
             let vault = one_vault(&app, vault.as_deref())?;
             if *status {
@@ -1090,6 +1138,100 @@ fn one_vault(app: &Marius, name: Option<&str>) -> Result<marius_model::Vault> {
                 1 => Ok(vaults.remove(0)),
                 _ => anyhow::bail!("several vaults are open; say which with --vault"),
             }
+        }
+    }
+}
+
+fn plugin_command(app: Marius, command: &PluginCommand, json: bool) -> Result<()> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let mut app = app;
+    match command {
+        PluginCommand::Install { dir } => {
+            let installation = app.install_plugin(dir)?;
+            println!(
+                "installed {} v{} — disabled, no capabilities; `marius plugin enable {}` when you trust it",
+                installation.manifest.id, installation.manifest.version, installation.manifest.id
+            );
+            Ok(())
+        }
+        PluginCommand::List => {
+            let installations = app.plugins()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&installations)?);
+                return Ok(());
+            }
+            if installations.is_empty() {
+                println!("no plugins installed");
+            }
+            for p in installations {
+                let grants: Vec<&str> = p.granted.iter().map(|c| c.as_str()).collect();
+                println!(
+                    "{:<20} v{:<8} {} [{}]",
+                    p.manifest.id,
+                    p.manifest.version,
+                    if p.enabled { "enabled " } else { "disabled" },
+                    grants.join(", ")
+                );
+            }
+            Ok(())
+        }
+        PluginCommand::Enable { plugin } => {
+            app.set_plugin_enabled(plugin, true)?;
+            println!("{plugin} enabled");
+            Ok(())
+        }
+        PluginCommand::Disable { plugin } => {
+            app.set_plugin_enabled(plugin, false)?;
+            println!("{plugin} disabled");
+            Ok(())
+        }
+        PluginCommand::Grant { plugin, capability } => {
+            let capability: marius_model::Capability =
+                capability.parse().map_err(|e| anyhow::anyhow!("{e}"))?;
+            app.set_plugin_capability(plugin, capability, true)?;
+            println!("{plugin} may now {capability}");
+            Ok(())
+        }
+        PluginCommand::Revoke { plugin, capability } => {
+            let capability: marius_model::Capability =
+                capability.parse().map_err(|e| anyhow::anyhow!("{e}"))?;
+            app.set_plugin_capability(plugin, capability, false)?;
+            println!("{plugin} may no longer {capability}");
+            Ok(())
+        }
+        PluginCommand::Commands { plugin } => {
+            let shared = Rc::new(RefCell::new(app));
+            let commands = marius_core::plugins::plugin_commands(shared, plugin)?;
+            for command in commands {
+                println!("{command}");
+            }
+            Ok(())
+        }
+        PluginCommand::Run {
+            plugin,
+            command,
+            vault,
+        } => {
+            let vault = one_vault(&app, vault.as_deref())?;
+            let shared = Rc::new(RefCell::new(app));
+            let (output, log) =
+                marius_core::plugins::run_plugin_command(shared, vault.id, plugin, command)?;
+            for line in log {
+                println!("{line}");
+            }
+            if !output.is_empty() {
+                println!("{output}");
+            }
+            Ok(())
+        }
+        PluginCommand::Remove { plugin } => {
+            if app.remove_plugin(plugin)? {
+                println!("{plugin} removed; its directory is untouched");
+            } else {
+                println!("no plugin {plugin:?}");
+            }
+            Ok(())
         }
     }
 }

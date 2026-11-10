@@ -4,7 +4,7 @@ What works today, what is designed but not built, and what is next. Precise
 per-requirement status is in [TRACEABILITY.md](TRACEABILITY.md), which is
 checked against the specification on every `cargo test`.
 
-**As of this writing: 705 tests (625 core + 80 UI), zero clippy warnings, formatted.**
+**As of this writing: 713 tests (633 core + 80 UI), zero clippy warnings, formatted.**
 
 ## Platform position
 
@@ -181,6 +181,17 @@ line.
   per message, thread identifiers kept). Names are made Windows-portable
   on the way in, collisions get numbered variants, everything indexes
   immediately. PDF and Word extraction remain open.
+- **JavaScript plugins** — `marius plugin install/enable/grant/run`. A
+  plugin is a directory with `manifest.json` and `main.js`, run inside
+  Boa (pure Rust: no native toolchain anywhere, including Windows). It
+  starts disabled with no capabilities; each power is granted by the
+  user, one at a time, and checked at the single native entry point —
+  a manifest request is never a grant. File access goes through the
+  document service, so source protection applies to plugins exactly as
+  to everything else; a throwing or looping plugin is an error message,
+  not a crash. The `marius.*` API: search, read, write, log,
+  registerCommand. The Obsidian-compatibility shim over this runtime is
+  the part that remains.
 
 ## Designed and stored for, but not built
 

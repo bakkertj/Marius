@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **133 done, 23 partial, 9 ready, 29 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **137 done, 25 partial, 7 ready, 25 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -200,16 +200,16 @@ Totals of 194 requirement IDs: **133 done, 23 partial, 9 ready, 29 open**. Every
 
 | ID | Status | Where | Notes |
 |---|---|---|---|
-| PLUG-001 | ready | `PluginInstallation` | Installs disabled with no capabilities. |
-| PLUG-002 | open | `crates/plugin-compat` | Not yet created; engine choice open. |
+| PLUG-001 | done | `install_plugin`, `marius plugin install/enable/remove` | `an_installed_plugin_starts_powerless_and_runs_once_trusted` |
+| PLUG-002 | partial | `marius-plugin-host` (Boa) | Marius's own runtime is live; the Obsidian-API compatibility shim over it remains. |
 | PLUG-003 | ready | `PluginManifest` | Reads the documented manifest format. |
-| PLUG-004 | open | — | Needs the runtime. |
-| PLUG-005 | ready | `Capability::{ReadVault,WriteVault}` | Mediated through the document service. |
+| PLUG-004 | partial | `plugin-host` tests, `core/tests/plugin.rs` | Behavioural suite for the marius API; the independently-defined Obsidian-API suite remains. |
+| PLUG-005 | done | `VaultHostApi` over the document service | Plugin writes go through save/create_document — never the filesystem — so source protection applies. |
 | PLUG-006 | ready | `CompatibilityDiagnostic` | `the_compatibility_report_names_unsupported_apis` |
 | PLUG-007 | done | `Capability::requires_explicit_consent` | `dangerous_capabilities_need_explicit_consent` |
-| PLUG-008 | open | — | Needs the runtime sandbox. |
+| PLUG-008 | done | runtime limits + Result-shaped evaluation | `a_crashing_plugin_leaves_the_application_standing`; runaway loops killed by the interpreter's limits. |
 | PLUG-009 | ready | `desktop_only` manifest flag | Desktop prioritised. |
-| PLUG-010 | open | — | Marius's own plugin interface. |
+| PLUG-010 | done | the `marius.*` prelude + commands registry | `a_plugin_reads_searches_and_writes_through_the_door` |
 | PLUG-011 | open | — | P2. |
 | PLUG-012 | open | — | P2; no Electron, by construction. |
 | PLUG-013 | open | — | P2. |

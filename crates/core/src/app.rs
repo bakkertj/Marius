@@ -56,7 +56,9 @@ pub enum CoreError {
     NotEditable(VaultPath, DocumentKind),
     #[error("{0} is write-protected")]
     WriteProtected(VaultPath),
-    #[error("inference failed: {0}")]
+    /// A failure explained in its own words — inference, sync, import
+    /// and plugin errors all speak for themselves.
+    #[error("{0}")]
     Inference(String),
     #[error("invalid name {0:?}: {1}")]
     InvalidName(String, String),

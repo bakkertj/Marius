@@ -36,6 +36,7 @@ pub mod documents;
 pub mod generated;
 pub mod inference;
 pub mod migrations;
+pub mod plugins;
 pub mod relationships;
 pub mod replica;
 pub mod revisions;

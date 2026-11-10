@@ -23,13 +23,28 @@ GPUI-on-iOS feasibility prototype first, which is phase 0 work.
 
 ## 2. Which embedded JavaScript engine for plugins?
 
-**Open.** Unchanged.
+**Decided: Boa.**
 
-The capability model that constrains whichever engine is chosen is built
-(`model::plugin`): installs land disabled with no grants, dangerous
-capabilities need explicit consent, and a grant cannot widen a vault's privacy
-policy. That is the part worth settling early, because it shapes the host API
-regardless of engine.
+Three candidates: V8 (via `deno_core`), QuickJS (via `rquickjs`), and Boa.
+V8 is the fastest and the most compatible, and also a C++ build dependency
+heavier than the rest of the workspace combined. QuickJS is small but is a C
+library, which re-introduces a native toolchain on every platform — and
+"builds plainly on the user's Windows work machine" has been a hard
+requirement from the start. Boa is pure Rust: `cargo build` on a bare
+Windows runner is the whole story, as the rest of Marius already proves in
+CI.
+
+The cost is speed and bleeding-edge ECMAScript coverage, and for plugin
+logic — commands that read a few notes and write one — neither is the
+bottleneck. The engine is also contained behind one crate
+(`marius-plugin-host`) with one native entry point, so replacing it later
+would not ripple.
+
+What the host enforces regardless of engine: one door (`__marius_call`),
+capabilities checked at that door against the *user's* grants (a manifest
+request is never a grant), file access through the document service only,
+and runtime limits so a hanging plugin is an error instead of a hung
+application.
 
 ---
 

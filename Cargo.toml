@@ -10,6 +10,7 @@ members = [
     "crates/llm",
     "crates/llm-policy",
     "crates/sync-service",
+    "crates/plugin-host",
     "crates/classification",
     "crates/embeddings",
     "crates/import",
@@ -40,6 +41,7 @@ marius-graph = { path = "crates/graph" }
 marius-llm = { path = "crates/llm" }
 marius-llm-policy = { path = "crates/llm-policy" }
 marius-sync-service = { path = "crates/sync-service" }
+marius-plugin-host = { path = "crates/plugin-host" }
 marius-classification = { path = "crates/classification" }
 marius-embeddings = { path = "crates/embeddings" }
 marius-import = { path = "crates/import" }
@@ -61,6 +63,7 @@ notify = "7"
 notify-debouncer-full = "0.4"
 walkdir = "2"
 htmd = "0.2"
+boa_engine = "0.20"
 mail-parser = "0.11"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -18,6 +18,7 @@ marius-llm-policy = { workspace = true }
 marius-classification = { workspace = true }
 marius-embeddings = { workspace = true }
 marius-import = { workspace = true }
+marius-plugin-host = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

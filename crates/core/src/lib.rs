@@ -1,6 +1,7 @@
 pub mod app;
 pub mod config;
 pub mod graph;
+pub mod plugins;
 pub mod search;
 pub mod sync_client;
 
