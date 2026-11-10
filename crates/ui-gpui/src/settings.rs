@@ -222,15 +222,41 @@ impl SettingsView {
                     if !base.starts_with("http") {
                         return Err(format!("{base:?} is not a URL"));
                     }
-                    match &choice.credential {
-                        Some(name) if std::env::var(name).is_err() => Err(format!(
-                            "credential variable {name:?} is not set in this app's environment"
-                        )),
-                        Some(name) => Ok(format!(
-                            "configured · key found in ${name} · not dialled (remote calls cost)"
-                        )),
-                        None => Ok("configured · no credential named · not dialled".to_owned()),
-                    }
+                    let key = match &choice.credential {
+                        Some(name) => match std::env::var(name) {
+                            Ok(value) => Some(value),
+                            Err(_) => {
+                                return Err(format!(
+                                    "credential variable {name:?} is not set in this \
+                                     app's environment (set it, then restart the app)"
+                                ))
+                            }
+                        },
+                        None => None,
+                    };
+                    // GET /models proves DNS, the route, the TLS trust
+                    // chain and the credential — no note content moves.
+                    let remote = marius_llm::openai::OpenAiCompatible::new(
+                        choice.provider.clone(),
+                        base,
+                        marius_model::Locality::Remote,
+                        key,
+                    );
+                    let models = remote.models().map_err(|e| e.to_string())?;
+                    Ok(if models.iter().any(|m| m == &choice.model) {
+                        format!(
+                            "reachable · {} model(s) · '{}' is offered",
+                            models.len(),
+                            choice.model
+                        )
+                    } else {
+                        format!(
+                            "reachable · {} model(s) · '{}' is not in its listing \
+                             (maybe fine: some gateways list partially)",
+                            models.len(),
+                            choice.model
+                        )
+                    })
                 }
             })();
             let _ = sender.send(result);

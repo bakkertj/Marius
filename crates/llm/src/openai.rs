@@ -43,6 +43,32 @@ impl OpenAiCompatible {
         }
     }
 
+    /// List the endpoint's models (`GET /models`) — the cheap call a
+    /// settings "Test connection" can make: it proves DNS, the route,
+    /// the TLS trust chain and the credential without sending a single
+    /// word of note content.
+    pub fn models(&self) -> Result<Vec<String>, LlmError> {
+        let endpoint = format!("{}/models", self.base_url);
+        #[derive(Deserialize)]
+        struct Listing {
+            data: Vec<Entry>,
+        }
+        #[derive(Deserialize)]
+        struct Entry {
+            id: String,
+        }
+        let mut call = self.client.get(&endpoint);
+        if let Some(key) = &self.api_key {
+            call = call.bearer_auth(key);
+        }
+        let response = call.send().map_err(|source| LlmError::Unreachable {
+            endpoint: endpoint.clone(),
+            source,
+        })?;
+        let listing: Listing = crate::ollama::check(&endpoint, response)?;
+        Ok(listing.data.into_iter().map(|entry| entry.id).collect())
+    }
+
     /// OpenRouter with its conventional base URL.
     pub fn openrouter(api_key: String) -> Self {
         Self::new(

@@ -58,7 +58,7 @@ blake3 = "1"
 rusqlite = { version = "0.32", features = ["bundled", "backup", "functions"] }
 pulldown-cmark = { version = "0.12", default-features = false, features = ["simd", "html"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "system-proxy", "stream", "blocking"] }
 notify = "7"
 notify-debouncer-full = "0.4"
 walkdir = "2"

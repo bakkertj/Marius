@@ -481,6 +481,11 @@ enum ModelCommand {
     },
     /// Remove the model for a task.
     Clear { task: String },
+    /// Dial the configured endpoint for a task and report exactly what
+    /// failed — DNS, the route, the TLS trust chain, the credential.
+    /// No note content is sent; Ollama is asked for its model list,
+    /// anything else for `GET /models`.
+    Test { task: String },
 }
 
 fn main() -> std::process::ExitCode {
@@ -1478,6 +1483,68 @@ fn model_command(app: &mut Marius, command: &ModelCommand, json: bool) -> Result
                     }
                     None => println!("{task:<20} —"),
                 }
+            }
+            Ok(())
+        }
+        ModelCommand::Test { task } => {
+            let models = &app.config().models;
+            let choice = match task.as_str() {
+                "tagging" => &models.tagging,
+                "embedding" => &models.embedding,
+                "summarization" => &models.summarization,
+                "question_answering" => &models.question_answering,
+                "relationship_discovery" => &models.relationship_discovery,
+                other => anyhow::bail!("unknown task {other:?}"),
+            };
+            let Some(choice) = choice else {
+                anyhow::bail!("no model configured for {task} (marius model set …)");
+            };
+            if choice.provider == "ollama" {
+                let base = choice
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| marius_llm::ollama::DEFAULT_BASE_URL.to_owned());
+                let daemon = marius_llm::ollama::Ollama::new(base);
+                let listed = daemon.models()?;
+                println!("reachable · {} model(s)", listed.len());
+                let present = listed
+                    .iter()
+                    .any(|m| m == &choice.model || m.trim_end_matches(":latest") == choice.model);
+                if present {
+                    println!("'{}' is pulled", choice.model);
+                } else {
+                    println!(
+                        "'{}' is NOT pulled (ollama pull {})",
+                        choice.model, choice.model
+                    );
+                }
+                return Ok(());
+            }
+            let base = choice
+                .base_url
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("{} has no base URL configured", choice.provider))?;
+            let key = match &choice.credential {
+                Some(name) => Some(std::env::var(name).map_err(|_| {
+                    anyhow::anyhow!("credential variable {name:?} is not set in this shell")
+                })?),
+                None => None,
+            };
+            let remote = marius_llm::openai::OpenAiCompatible::new(
+                choice.provider.clone(),
+                base,
+                marius_model::Locality::Remote,
+                key,
+            );
+            let listed = remote.models()?;
+            println!("reachable · {} model(s)", listed.len());
+            if listed.iter().any(|m| m == &choice.model) {
+                println!("'{}' is offered", choice.model);
+            } else {
+                println!(
+                    "'{}' is not in its listing (maybe fine: some gateways list partially)",
+                    choice.model
+                );
             }
             Ok(())
         }

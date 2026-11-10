@@ -17,6 +17,7 @@ marius-model = { workspace = true }
 marius-storage = { workspace = true }
 marius-indexing = { workspace = true }
 marius-search = { workspace = true }
+marius-llm = { workspace = true }
 anyhow = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { workspace = true }

@@ -57,7 +57,7 @@ pub trait ChatProvider {
 /// daemon that is not running, and callers degrade gracefully on it (AI-004).
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
-    #[error("cannot reach {endpoint}: {source}")]
+    #[error("cannot reach {endpoint}: {}", error_chain(.source))]
     Unreachable {
         endpoint: String,
         #[source]
@@ -71,6 +71,22 @@ pub enum LlmError {
     },
     #[error("unexpected response from {endpoint}: {detail}")]
     Protocol { endpoint: String, detail: String },
+}
+
+/// The whole cause chain, joined — reqwest's top line is "error sending
+/// request for url", which hides the part a person can act on (the DNS
+/// failure, the refused connection, the untrusted certificate).
+pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut cursor = error.source();
+    while let Some(cause) = cursor {
+        let text = cause.to_string();
+        if parts.last() != Some(&text) {
+            parts.push(text);
+        }
+        cursor = cause.source();
+    }
+    parts.join(": ")
 }
 
 pub(crate) fn http_client(timeout: Duration) -> reqwest::blocking::Client {
