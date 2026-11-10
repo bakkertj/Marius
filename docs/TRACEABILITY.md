@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **125 done, 23 partial, 14 ready, 32 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **130 done, 23 partial, 9 ready, 32 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -127,10 +127,10 @@ Totals of 194 requirement IDs: **125 done, 23 partial, 14 ready, 32 open**. Ever
 | AI-008 | done | `Sensitivity::across` | `strictest_level_wins_across_a_prompt` |
 | AI-009 | done | `Authorship`, `Provenance` | Enforced in storage, not just intended. |
 | AI-010 | partial | `suggest_tags(apply)`, review flow | Suggestions land unreviewed for approval; background auto-classification on index still off. |
-| AI-011 | ready | `GeneratedNoteProvenance`, `Citation` | Table migrated; generation not built. |
+| AI-011 | done | `Marius::summarize`, `storage::generated`, `marius summarize` | `a_summary_lands_as_a_derived_note_with_visible_provenance` — provenance row and in-file Sources section. |
 | AI-012 | done | `Authorship::Derived`, `is:generated` | `ai_012_generated_notes_are_filterable` |
-| AI-013 | ready | `GeneratedNoteProvenance::allows_in_place_regeneration` | Rule implemented and tested; no generator to apply it. |
-| AI-014 | ready | `Authorship::Promoted` | Modelled and protected. |
+| AI-013 | done | save-hook flips `user_edited`; regenerate consults it | `regeneration_replaces_in_place_until_a_person_edits_then_writes_a_sibling` |
+| AI-014 | done | `Marius::promote_note`, `marius note promote` | `a_promoted_note_is_protected_like_a_source_document` |
 | AI-015 | done | `storage::inference`, `marius audit` | Every request audited, refusals included; tokens and duration recorded. |
 | AI-016 | partial | `VaultPolicy`, `config` | Per-vault rules and prompt IDs modelled. |
 | AI-017 | done | `VaultPath` traversal refusal, `Capability` | `paths_refuse_to_escape_the_vault` |
@@ -165,7 +165,7 @@ Totals of 194 requirement IDs: **125 done, 23 partial, 14 ready, 32 open**. Ever
 | GRAPH-004 | done | `relationships::in_vaults` | `edges_can_be_filtered_by_kind_for_the_graph_view` |
 | GRAPH-005 | done | `core::graph` focus+depth, `neighbourhood` | `local_graph_is_a_bounded_neighbourhood`; local/global toggle in the view. |
 | GRAPH-006 | partial | `tags::documents_with` | Data available; bipartite view needs the UI. |
-| GRAPH-007 | ready | `RelationshipKind::Semantic` | Stored, confidence-carrying, reversible. |
+| GRAPH-007 | done | `discover_relationships`, `marius discover` | `discovery_proposes_an_explained_edge_and_respects_rejection` — embeddings nominate, the model judges and explains. |
 | GRAPH-008 | done | `GlobalDocumentId`, no FK on endpoints | `graph_queries_see_cross_vault_edges_from_either_side` |
 | GRAPH-009 | done | `Relationship` | `edge_metadata_survives_a_round_trip` |
 | GRAPH-010 | done | `relationships::{upsert,confirm,delete,reject}` | `confirming_an_edge_protects_it_from_re_inference` |
@@ -271,7 +271,7 @@ Totals of 194 requirement IDs: **125 done, 23 partial, 14 ready, 32 open**. Ever
 | AC-007 | done | `semantic_search_ranks_by_meaning_and_hybrid_fuses` (conceptual match without the keyword). |
 | AC-008 | done | `a_grounded_answer_cites_real_passages_by_byte_range`; refusal honesty in the off-topic test. |
 | AC-009 | done | `ac_009_cross_vault_links_and_global_search` |
-| AC-010 | ready | `a_user_edited_note_is_never_regenerated_in_place` (rule tested; no generator) |
+| AC-010 | done | `regeneration_replaces_in_place_until_a_person_edits_then_writes_a_sibling` — the user's bytes survive, the fresh run lands beside them. |
 | AC-011 | done | `ac_011_a_pasted_email_becomes_ordinary_knowledge` |
 | AC-012 | done | `concurrent_edits_conflict_and_neither_side_is_discarded` — offline edits on two devices, conflict surfaced, nothing lost. |
 | AC-013 | open | Needs CloudKit. |

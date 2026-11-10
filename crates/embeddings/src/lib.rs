@@ -81,6 +81,56 @@ pub fn fuse_reciprocal_rank(lists: &[&[DocumentId]], k: f64) -> Vec<(DocumentId,
     out
 }
 
+/// Candidate pairs for relationship discovery (GRAPH-007): documents whose
+/// vector centroids sit closer than `min_similarity`, best first, capped.
+///
+/// Embeddings are the cheap nominator; a model is the judge. The centroid
+/// of a document's chunks is crude but exactly crude enough for a short
+/// list the judge then reads properly.
+pub fn similar_document_pairs(
+    embeddings: &[ChunkEmbedding],
+    min_similarity: f32,
+    max_pairs: usize,
+) -> Vec<(DocumentId, DocumentId, f32)> {
+    let mut sums: HashMap<DocumentId, (Vec<f32>, usize)> = HashMap::new();
+    for e in embeddings {
+        let entry = sums
+            .entry(e.document)
+            .or_insert_with(|| (vec![0.0; e.vector.len()], 0));
+        if entry.0.len() != e.vector.len() {
+            continue; // stray vector from another space: skip, never mix
+        }
+        for (slot, v) in entry.0.iter_mut().zip(&e.vector) {
+            *slot += v;
+        }
+        entry.1 += 1;
+    }
+    let centroids: Vec<(DocumentId, Vec<f32>)> = sums
+        .into_iter()
+        .map(|(doc, (sum, n))| {
+            let n = n.max(1) as f32;
+            (doc, sum.into_iter().map(|v| v / n).collect())
+        })
+        .collect();
+
+    let mut pairs = Vec::new();
+    for i in 0..centroids.len() {
+        for j in (i + 1)..centroids.len() {
+            if let Some(score) = cosine_similarity(&centroids[i].1, &centroids[j].1) {
+                if score >= min_similarity {
+                    pairs.push((centroids[i].0, centroids[j].0, score));
+                }
+            }
+        }
+    }
+    pairs.sort_by(|a, b| {
+        b.2.total_cmp(&a.2)
+            .then_with(|| (a.0, a.1).cmp(&(b.0, b.1)))
+    });
+    pairs.truncate(max_pairs);
+    pairs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +190,31 @@ mod tests {
         // The two single-list items tie exactly; first appearance wins.
         assert_eq!(fused[1].0, a);
         assert_eq!(fused[2].0, c);
+    }
+
+    #[test]
+    fn similar_pairs_rank_by_centroid_closeness() {
+        let a = DocumentId::new();
+        let b = DocumentId::new();
+        let c = DocumentId::new();
+        let stored = vec![
+            embedding(a, vec![1.0, 0.0]),
+            embedding(a, vec![0.9, 0.1]),
+            embedding(b, vec![1.0, 0.05]), // near a
+            embedding(c, vec![0.0, 1.0]),  // far from both
+        ];
+        let pairs = similar_document_pairs(&stored, 0.9, 10);
+        assert_eq!(pairs.len(), 1, "{pairs:?}");
+        let (x, y, score) = pairs[0];
+        assert!(score > 0.99);
+        let mut got = [x, y];
+        got.sort();
+        let mut want = [a, b];
+        want.sort();
+        assert_eq!(got, want);
+
+        // The floor and the cap both bite.
+        assert_eq!(similar_document_pairs(&stored, 0.2, 1).len(), 1);
     }
 
     #[test]

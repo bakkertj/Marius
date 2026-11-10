@@ -4,7 +4,7 @@ What works today, what is designed but not built, and what is next. Precise
 per-requirement status is in [TRACEABILITY.md](TRACEABILITY.md), which is
 checked against the specification on every `cargo test`.
 
-**As of this writing: 672 tests (595 core + 77 UI), zero clippy warnings, formatted.**
+**As of this writing: 692 tests (612 core + 80 UI), zero clippy warnings, formatted.**
 
 ## Platform position
 
@@ -163,6 +163,17 @@ line.
   refused (SYNC-013); run the server behind a TLS proxy. Proven by
   two-device round-trip tests over real HTTP and verified live with two
   CLI data directories against the production binary.
+- **Generated notes and relationship discovery** — `marius summarize`
+  writes a synthesis note as a real Markdown file with a Sources section
+  of wiki links, marked `Derived` and excludable from listings, with a
+  provenance row naming model, prompt and sources. Regeneration replaces
+  the body in place only until a person edits it — then the gate flips
+  permanently and fresh runs land beside the user's copy (integrity rule
+  6, AC-010); `marius note promote` adopts a note as the user's own.
+  `marius discover` has embeddings nominate candidate pairs and a model
+  judge each with a one-sentence rationale stored on the edge; proposals
+  arrive unreviewed for `marius link confirm/reject`, and a rejected pair
+  is never re-proposed. Every request audited, policy-gated per source.
 
 ## Designed and stored for, but not built
 

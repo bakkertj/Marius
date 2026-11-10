@@ -64,6 +64,35 @@ enum Command {
     /// Drop and rebuild every derived index, keeping all metadata.
     Rebuild,
 
+    /// Write a synthesis note from one or more source notes (AI-011).
+    /// Regenerating replaces the note in place only while nobody has
+    /// edited it; afterwards a sibling is written instead (AC-010).
+    Summarize {
+        /// Source documents: `vault:path` or `path`.
+        documents: Vec<String>,
+        /// Where the note goes; default: generated/<title>.md
+        #[arg(long)]
+        out: Option<String>,
+    },
+
+    /// Generated-note management.
+    #[command(subcommand)]
+    Note(NoteCommand),
+
+    /// Propose semantic relationships between notes (GRAPH-007). Needs
+    /// `marius embed` to have run; review with `marius link`.
+    Discover {
+        /// Vault name. Omit when exactly one vault is open.
+        vault: Option<String>,
+        /// Most pairs to judge this run.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+
+    /// Review and draw relationship edges.
+    #[command(subcommand)]
+    Link(LinkCommand),
+
     /// Replicate a vault against its configured backend: pull, apply,
     /// push (SYNC-004..011). `MARIUS_SYNC_TOKEN` supplies the bearer
     /// secret when the server requires one.
@@ -275,6 +304,30 @@ enum TagCommand {
 }
 
 #[derive(clap::Subcommand)]
+enum NoteCommand {
+    /// Show what generated a note: model, prompt, sources (AI-011).
+    Provenance { document: String },
+    /// Adopt a generated note as your own (AI-014). From then on it is
+    /// protected exactly like a note you wrote.
+    Promote { document: String },
+}
+
+#[derive(clap::Subcommand)]
+enum LinkCommand {
+    /// Draw an edge yourself (GRAPH-010).
+    Add { source: String, target: String },
+    /// Accept a proposed edge, protecting it from re-inference.
+    Confirm { source: String, target: String },
+    /// Reject the edge; discovery will never re-propose it (GRAPH-011).
+    Reject {
+        source: String,
+        target: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(clap::Subcommand)]
 enum ModelCommand {
     /// Current model configuration.
     Show,
@@ -369,6 +422,128 @@ fn run(cli: &Cli) -> Result<()> {
             Ok(())
         }
         Command::Watch { vault, debounce } => watch_command(&mut app, vault.as_deref(), *debounce),
+        Command::Summarize { documents, out } => {
+            let mut ids = Vec::new();
+            for reference in documents {
+                let (_, found) = DocumentRef::resolve(&app, reference)?;
+                ids.push(found.id);
+            }
+            let out = out
+                .as_deref()
+                .map(marius_model::VaultPath::new)
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            match app.summarize(&ids, out.as_ref())? {
+                marius_core::Summarized::Refused(reason) => {
+                    println!("not generated: {reason}");
+                }
+                marius_core::Summarized::Written {
+                    document,
+                    provenance,
+                    wrote_sibling,
+                } => {
+                    println!(
+                        "{} {} ({})",
+                        if wrote_sibling {
+                            "wrote sibling"
+                        } else {
+                            "wrote"
+                        },
+                        document.path,
+                        provenance.attribution()
+                    );
+                    if wrote_sibling {
+                        println!(
+                            "the existing note was edited by hand, so it was left alone (AC-010)"
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+        Command::Note(command) => match command {
+            NoteCommand::Provenance { document } => {
+                let (_, found) = DocumentRef::resolve(&app, document)?;
+                match app.note_provenance(found.id)? {
+                    None => println!("{} is not a generated note", found.path),
+                    Some(p) => {
+                        println!("{}", p.attribution());
+                        println!(
+                            "prompt {} · {}",
+                            p.prompt_id.as_deref().unwrap_or("—"),
+                            if p.user_edited {
+                                "edited by hand since (regeneration writes siblings)"
+                            } else {
+                                "untouched (regeneration replaces in place)"
+                            }
+                        );
+                        for source in &p.sources {
+                            println!("  from {}", source.label);
+                        }
+                    }
+                }
+                Ok(())
+            }
+            NoteCommand::Promote { document } => {
+                let (_, found) = DocumentRef::resolve(&app, document)?;
+                app.promote_note(found.id)?;
+                println!(
+                    "{} is yours now; automation keeps its hands off",
+                    found.path
+                );
+                Ok(())
+            }
+        },
+        Command::Discover { vault, limit } => {
+            let vault = one_vault(&app, vault.as_deref())?;
+            let report = app.discover_relationships(&vault, *limit)?;
+            if let Some(refusal) = &report.refusal {
+                println!("nothing discovered: {refusal}");
+                return Ok(());
+            }
+            println!(
+                "{} proposed, {} judged unrelated, {} already connected, {} rejected before, {} off-policy",
+                report.proposed,
+                report.judged_unrelated,
+                report.skipped_existing,
+                report.skipped_rejected,
+                report.skipped_policy
+            );
+            if report.proposed > 0 {
+                println!("review with `marius graph <note>` and `marius link confirm/reject`");
+            }
+            Ok(())
+        }
+        Command::Link(command) => {
+            let (a, b) = match command {
+                LinkCommand::Add { source, target }
+                | LinkCommand::Confirm { source, target }
+                | LinkCommand::Reject { source, target, .. } => (source, target),
+            };
+            let (_, source) = DocumentRef::resolve(&app, a)?;
+            let (_, target) = DocumentRef::resolve(&app, b)?;
+            match command {
+                LinkCommand::Add { .. } => {
+                    app.assert_relationship(source.id, target.id)?;
+                    println!("linked {} — {}", source.path, target.path);
+                }
+                LinkCommand::Confirm { .. } => {
+                    if app.confirm_relationship(source.id, target.id)? {
+                        println!("confirmed; re-inference cannot remove it");
+                    } else {
+                        println!("no proposed edge between those notes");
+                    }
+                }
+                LinkCommand::Reject { reason, .. } => {
+                    if app.reject_relationship(source.id, target.id, reason.as_deref())? {
+                        println!("rejected; discovery will not re-propose it");
+                    } else {
+                        println!("no edge between those notes");
+                    }
+                }
+            }
+            Ok(())
+        }
         Command::Sync { vault, status } => {
             let vault = one_vault(&app, vault.as_deref())?;
             if *status {

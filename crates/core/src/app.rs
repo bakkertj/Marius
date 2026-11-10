@@ -429,6 +429,12 @@ impl Marius {
 
         let options = self.index_options(&vault)?;
         indexer::index_path(&mut self.db, &vault, &document.path, &options)?;
+
+        // Integrity rule 6: the moment a person touches a generated note's
+        // body, regeneration loses the right to replace it (AI-013).
+        if marius_storage::generated::get(self.db.conn(), id)?.is_some() {
+            marius_storage::generated::mark_user_edited(self.db.conn(), id)?;
+        }
         Ok(hash)
     }
 
@@ -1812,6 +1818,485 @@ impl Marius {
         }
     }
 
+    /// Write (or regenerate) a synthesis note from source documents
+    /// (AI-011..AI-014, AC-010).
+    ///
+    /// The note lands as a real Markdown file with a Sources section of
+    /// wiki links, is marked `Derived`, and carries a provenance row
+    /// naming model, prompt and sources. Regeneration replaces the body
+    /// in place ONLY while no person has edited it; afterwards a sibling
+    /// note is written instead — the user's bytes are never the model's
+    /// to take back (integrity rule 6).
+    pub fn summarize(
+        &mut self,
+        ids: &[DocumentId],
+        output: Option<&VaultPath>,
+    ) -> Result<Summarized> {
+        if ids.is_empty() {
+            return Err(CoreError::Inference("no source documents given".into()));
+        }
+        let mut documents = Vec::with_capacity(ids.len());
+        for id in ids {
+            documents.push(self.document(*id)?);
+        }
+        let vault_id = documents[0].vault;
+        if documents.iter().any(|d| d.vault != vault_id) {
+            return Err(CoreError::Inference(
+                "sources must belong to one vault".into(),
+            ));
+        }
+        let vault = self.vault_by_id(vault_id)?;
+        let policy = self.vault_policy(vault_id)?;
+        let sensitivity = marius_model::Sensitivity::across(
+            documents.iter().map(|d| policy.effective(d.sensitivity)),
+        );
+        let globals: Vec<GlobalDocumentId> = documents
+            .iter()
+            .map(|d| GlobalDocumentId::new(d.vault, d.id))
+            .collect();
+
+        let Some(choice) = self.config.models.summarization.clone() else {
+            let reason = "no provider is configured for summarization".to_owned();
+            let mut record = InferenceRecord::denied(
+                InferenceTask::Summarization,
+                sensitivity,
+                globals,
+                reason.clone(),
+            );
+            record.outcome = InferenceOutcome::NoEligibleProvider;
+            inference::record(self.db.conn(), &record)?;
+            return Ok(Summarized::Refused(reason));
+        };
+        let profile = choice.profile();
+        let decision = marius_llm_policy::decide(
+            &policy,
+            InferenceTask::Summarization,
+            sensitivity,
+            std::slice::from_ref(&profile),
+        );
+        if decision.approved().is_none() {
+            let mut record = InferenceRecord::denied(
+                InferenceTask::Summarization,
+                sensitivity,
+                globals,
+                decision.reason().to_owned(),
+            );
+            if matches!(
+                decision,
+                marius_llm_policy::Decision::NoEligibleProvider { .. }
+            ) {
+                record.outcome = InferenceOutcome::NoEligibleProvider;
+            }
+            inference::record(self.db.conn(), &record)?;
+            return Ok(Summarized::Refused(decision.reason().to_owned()));
+        }
+        let client = match build_client(&choice, &profile) {
+            Ok(client) => client,
+            Err(reason) => {
+                let mut record = InferenceRecord::denied(
+                    InferenceTask::Summarization,
+                    sensitivity,
+                    globals,
+                    reason.clone(),
+                );
+                record.outcome = InferenceOutcome::NoEligibleProvider;
+                inference::record(self.db.conn(), &record)?;
+                return Ok(Summarized::Refused(reason));
+            }
+        };
+
+        let mut sources = Vec::with_capacity(documents.len());
+        for document in &documents {
+            sources.push(marius_classification::summary::Source {
+                title: document.title.clone(),
+                text: self.read(document)?,
+            });
+        }
+        let request = marius_classification::summary::request(&sources);
+
+        let started = OffsetDateTime::now_utc();
+        let clock = std::time::Instant::now();
+        let mut record = InferenceRecord::denied(
+            InferenceTask::Summarization,
+            sensitivity,
+            globals,
+            String::new(),
+        );
+        record.provider = Some(profile.name.clone());
+        record.model = Some(choice.model.clone());
+        record.locality = Some(profile.locality);
+        record.started_at = started;
+
+        let response = match client.chat_with(&choice.model, &request) {
+            Ok(response) => {
+                record.outcome = InferenceOutcome::Completed;
+                record.reason = format!("summary of {} note(s)", documents.len());
+                record.prompt_tokens = response.prompt_tokens;
+                record.completion_tokens = response.completion_tokens;
+                record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+                inference::record(self.db.conn(), &record)?;
+                response
+            }
+            Err(error) => {
+                record.outcome = InferenceOutcome::ProviderError;
+                record.reason = error.to_string();
+                record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+                inference::record(self.db.conn(), &record)?;
+                return Err(CoreError::Inference(error.to_string()));
+            }
+        };
+
+        // Where the note lives, and whether we may overwrite what is there.
+        let title = if documents.len() == 1 {
+            format!("Summary of {}", documents[0].title)
+        } else {
+            format!("Synthesis of {} notes", documents.len())
+        };
+        let path = match output {
+            Some(path) => path.clone(),
+            None => {
+                let name = marius_model::sanitize(&format!("{title}.md"));
+                VaultPath::new(format!("generated/{name}"))
+                    .map_err(|e| CoreError::Inference(e.to_string()))?
+            }
+        };
+
+        let source_titles: Vec<String> = documents.iter().map(|d| d.title.clone()).collect();
+        let body =
+            marius_classification::summary::note_body(&title, &response.text, &source_titles);
+
+        let mut wrote_sibling = false;
+        let target = match self.document_at(vault_id, &path)? {
+            Some(existing) => {
+                let provenance = marius_storage::generated::get(self.db.conn(), existing.id)?;
+                let replaceable = existing.authorship == marius_model::Authorship::Derived
+                    && provenance
+                        .as_ref()
+                        .is_some_and(|p| p.allows_in_place_regeneration());
+                if replaceable {
+                    // In-place regeneration adds a revision; the previous
+                    // body stays recoverable (AI-013).
+                    self.save_document(existing.id, &body)?;
+                    existing
+                } else {
+                    // A person edited it (or it never was generated):
+                    // their bytes stay; the fresh run lands beside them
+                    // (AC-010).
+                    wrote_sibling = true;
+                    let stem = path.as_str().trim_end_matches(".md");
+                    let sibling = VaultPath::new(format!("{stem} (regenerated).md"))
+                        .map_err(|e| CoreError::Inference(e.to_string()))?;
+                    match self.document_at(vault_id, &sibling)? {
+                        Some(previous_run) => {
+                            self.save_document(previous_run.id, &body)?;
+                            previous_run
+                        }
+                        None => self.create_document(&vault, &sibling, &body)?,
+                    }
+                }
+            }
+            None => self.create_document(&vault, &path, &body)?,
+        };
+
+        documents::set_authorship(self.db.conn(), target.id, marius_model::Authorship::Derived)?;
+        let revision = revisions::latest(self.db.conn(), target.id)?
+            .map(|r| r.id)
+            .unwrap_or_else(marius_model::RevisionId::new);
+        let provenance = marius_model::GeneratedNoteProvenance {
+            document: target.id,
+            revision,
+            inference: record.id,
+            task: InferenceTask::Summarization,
+            provider: profile.name.clone(),
+            model: response.model.clone(),
+            prompt_id: Some(marius_classification::summary::PROMPT_ID.to_owned()),
+            sources: documents
+                .iter()
+                .map(|d| marius_model::Citation {
+                    document: GlobalDocumentId::new(d.vault, d.id),
+                    chunk: None,
+                    label: d.title.clone(),
+                    byte_range: None,
+                })
+                .collect(),
+            generated_at: started,
+            user_edited: false,
+        };
+        marius_storage::generated::put(self.db.conn(), &provenance)?;
+        let document = self.document(target.id)?;
+        Ok(Summarized::Written {
+            document: Box::new(document),
+            provenance: Box::new(provenance),
+            wrote_sibling,
+        })
+    }
+
+    /// The provenance of a generated note, if the document is one (AI-011).
+    pub fn note_provenance(
+        &self,
+        id: DocumentId,
+    ) -> Result<Option<marius_model::GeneratedNoteProvenance>> {
+        Ok(marius_storage::generated::get(self.db.conn(), id)?)
+    }
+
+    /// Promote a generated note to a protected, user-owned document
+    /// (AI-014). From here on it is treated exactly like a source note:
+    /// regeneration writes siblings, automation keeps its hands off.
+    pub fn promote_note(&mut self, id: DocumentId) -> Result<()> {
+        let document = self.document(id)?;
+        if document.authorship != marius_model::Authorship::Derived {
+            return Err(CoreError::Inference(format!(
+                "{} is not a generated note",
+                document.path
+            )));
+        }
+        documents::set_authorship(self.db.conn(), id, marius_model::Authorship::Promoted)?;
+        Ok(())
+    }
+
+    /// Propose semantic relationships between documents (GRAPH-007).
+    ///
+    /// Embeddings nominate the candidate pairs; the model judges each and
+    /// explains itself; the edge lands `ai_generated`/unreviewed with the
+    /// rationale attached, behind the same storage gate that keeps a
+    /// rejected pair rejected (GRAPH-011, GRAPH-012).
+    pub fn discover_relationships(
+        &mut self,
+        vault: &Vault,
+        limit: usize,
+    ) -> Result<DiscoveryReport> {
+        let policy = self.vault_policy(vault.id)?;
+        let choice = self
+            .config
+            .models
+            .relationship_discovery
+            .clone()
+            .or_else(|| self.config.models.tagging.clone());
+        let Some(choice) = choice else {
+            let reason =
+                "no provider is configured for relationship_discovery (or tagging)".to_owned();
+            let mut record = InferenceRecord::denied(
+                InferenceTask::RelationshipDiscovery,
+                policy.default_sensitivity,
+                vec![],
+                reason.clone(),
+            );
+            record.outcome = InferenceOutcome::NoEligibleProvider;
+            inference::record(self.db.conn(), &record)?;
+            return Ok(DiscoveryReport {
+                refusal: Some(reason),
+                ..DiscoveryReport::default()
+            });
+        };
+        let profile = choice.profile();
+        let client = match build_client(&choice, &profile) {
+            Ok(client) => client,
+            Err(reason) => {
+                return Ok(DiscoveryReport {
+                    refusal: Some(reason),
+                    ..DiscoveryReport::default()
+                })
+            }
+        };
+
+        let stored = chunks::dominant_space_embeddings(self.db.conn())?;
+        if stored.is_empty() {
+            return Ok(DiscoveryReport {
+                refusal: Some("no embeddings; run `marius embed` first".into()),
+                ..DiscoveryReport::default()
+            });
+        }
+        let candidates = marius_embeddings::similar_document_pairs(&stored, 0.55, limit * 3);
+
+        let mut report = DiscoveryReport::default();
+        let mut judged: Vec<GlobalDocumentId> = Vec::new();
+        let started = OffsetDateTime::now_utc();
+        let clock = std::time::Instant::now();
+
+        for (a, b, _score) in candidates {
+            if report.proposed + report.judged_unrelated >= limit {
+                break;
+            }
+            let (Some(doc_a), Some(doc_b)) = (
+                documents::get(self.db.conn(), a)?,
+                documents::get(self.db.conn(), b)?,
+            ) else {
+                continue;
+            };
+            if doc_a.vault != vault.id || doc_b.vault != vault.id {
+                continue;
+            }
+            let endpoints = marius_model::Endpoints::new(
+                GlobalDocumentId::new(doc_a.vault, doc_a.id),
+                GlobalDocumentId::new(doc_b.vault, doc_b.id),
+            );
+            // Already connected, by any stored kind? Nothing to discover.
+            if !relationships::touching(self.db.conn(), doc_a.id)?
+                .iter()
+                .all(|r| {
+                    r.endpoints.source.document != doc_b.id
+                        && r.endpoints.target.document != doc_b.id
+                })
+            {
+                report.skipped_existing += 1;
+                continue;
+            }
+            // A durable rejection means never re-proposing (GRAPH-011).
+            let probe = marius_model::Relationship::new(
+                endpoints,
+                marius_model::RelationshipKind::Semantic,
+            );
+            if relationships::rejections(self.db.conn(), doc_a.id)?
+                .iter()
+                .any(|r| r.suppresses(&probe))
+            {
+                report.skipped_rejected += 1;
+                continue;
+            }
+
+            let sensitivity = marius_model::Sensitivity::across([
+                policy.effective(doc_a.sensitivity),
+                policy.effective(doc_b.sensitivity),
+            ]);
+            let decision = marius_llm_policy::decide(
+                &policy,
+                InferenceTask::RelationshipDiscovery,
+                sensitivity,
+                std::slice::from_ref(&profile),
+            );
+            if decision.approved().is_none() {
+                report.skipped_policy += 1;
+                continue;
+            }
+
+            let request = marius_classification::discovery::request(
+                &doc_a.title,
+                &self.read(&doc_a)?,
+                &doc_b.title,
+                &self.read(&doc_b)?,
+            );
+            let response = match client.chat_with(&choice.model, &request) {
+                Ok(response) => response,
+                Err(error) => {
+                    let mut record = InferenceRecord::denied(
+                        InferenceTask::RelationshipDiscovery,
+                        sensitivity,
+                        judged,
+                        error.to_string(),
+                    );
+                    record.outcome = InferenceOutcome::ProviderError;
+                    record.started_at = started;
+                    record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+                    inference::record(self.db.conn(), &record)?;
+                    return Err(CoreError::Inference(error.to_string()));
+                }
+            };
+            judged.push(probe.endpoints.source);
+            judged.push(probe.endpoints.target);
+            let verdict = marius_classification::discovery::parse_verdict(&response.text);
+            if !verdict.related {
+                report.judged_unrelated += 1;
+                continue;
+            }
+            let mut edge = probe;
+            edge.confidence = Some(verdict.confidence);
+            edge.model = Some(response.model.clone());
+            edge.rationale = verdict.rationale;
+            match relationships::upsert(self.db.conn(), &edge)? {
+                relationships::Upserted::SkippedRejected
+                | relationships::Upserted::SkippedProtected => {
+                    report.skipped_rejected += 1;
+                }
+                _ => report.proposed += 1,
+            }
+        }
+
+        let mut record = InferenceRecord::denied(
+            InferenceTask::RelationshipDiscovery,
+            policy.default_sensitivity,
+            judged,
+            format!(
+                "{} pair(s) judged, {} edge(s) proposed",
+                report.proposed + report.judged_unrelated,
+                report.proposed
+            ),
+        );
+        record.provider = Some(profile.name.clone());
+        record.model = Some(choice.model.clone());
+        record.locality = Some(profile.locality);
+        record.outcome = InferenceOutcome::Completed;
+        record.started_at = started;
+        record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+        inference::record(self.db.conn(), &record)?;
+        Ok(report)
+    }
+
+    /// Draw an edge yourself (GRAPH-010): kind `Asserted`, provenance
+    /// manual, no review needed.
+    pub fn assert_relationship(
+        &mut self,
+        source: DocumentId,
+        target: DocumentId,
+    ) -> Result<marius_model::Relationship> {
+        let a = self.document(source)?;
+        let b = self.document(target)?;
+        let edge = marius_model::Relationship::new(
+            marius_model::Endpoints::new(
+                GlobalDocumentId::new(a.vault, a.id),
+                GlobalDocumentId::new(b.vault, b.id),
+            ),
+            marius_model::RelationshipKind::Asserted,
+        );
+        relationships::upsert(self.db.conn(), &edge)?;
+        Ok(edge)
+    }
+
+    /// Accept a machine-proposed edge between two documents (GRAPH-010),
+    /// which also protects it from re-inference (GRAPH-012).
+    pub fn confirm_relationship(&mut self, source: DocumentId, target: DocumentId) -> Result<bool> {
+        match self.edge_between(source, target)? {
+            Some(edge) => Ok(relationships::confirm(self.db.conn(), edge.id)?),
+            None => Ok(false),
+        }
+    }
+
+    /// Reject the edge between two documents; the rejection is durable
+    /// against rediscovery and sync (GRAPH-011, integrity rule 7).
+    pub fn reject_relationship(
+        &mut self,
+        source: DocumentId,
+        target: DocumentId,
+        reason: Option<&str>,
+    ) -> Result<bool> {
+        match self.edge_between(source, target)? {
+            Some(edge) => Ok(relationships::reject(self.db.conn(), edge.id, reason)?),
+            None => Ok(false),
+        }
+    }
+
+    fn edge_between(
+        &self,
+        source: DocumentId,
+        target: DocumentId,
+    ) -> Result<Option<marius_model::Relationship>> {
+        // Prefer the machine-proposed kinds a user would be reviewing.
+        let a = self.document(source)?;
+        let b = self.document(target)?;
+        let endpoints = marius_model::Endpoints::new(
+            GlobalDocumentId::new(a.vault, a.id),
+            GlobalDocumentId::new(b.vault, b.id),
+        );
+        for kind in [
+            marius_model::RelationshipKind::Semantic,
+            marius_model::RelationshipKind::Asserted,
+        ] {
+            if let Some(edge) = relationships::by_endpoints(self.db.conn(), endpoints, kind)? {
+                return Ok(Some(edge));
+            }
+        }
+        Ok(None)
+    }
+
     /// The inference audit log, newest first (AI-015, SEC-006).
     pub fn inference_log(&self, limit: usize) -> Result<Vec<InferenceRecord>> {
         Ok(inference::recent(self.db.conn(), limit)?)
@@ -1958,6 +2443,38 @@ impl SuggestedTags {
             skipped: Vec::new(),
         }
     }
+}
+
+/// The outcome of one summarisation request (AI-011, AC-010).
+#[derive(Debug)]
+pub enum Summarized {
+    /// The policy engine or configuration stopped it; the reason is in
+    /// audit-log words and an audit row exists.
+    Refused(String),
+    Written {
+        document: Box<Document>,
+        provenance: Box<marius_model::GeneratedNoteProvenance>,
+        /// True when the target note was user-edited (or user-owned) and
+        /// the fresh run landed beside it instead (integrity rule 6).
+        wrote_sibling: bool,
+    },
+}
+
+/// What one discovery run did (GRAPH-007).
+#[derive(Debug, Default)]
+pub struct DiscoveryReport {
+    /// New `Semantic` edges stored, unreviewed, with rationale.
+    pub proposed: usize,
+    /// The model looked and said no.
+    pub judged_unrelated: usize,
+    /// Pairs already connected by a stored edge.
+    pub skipped_existing: usize,
+    /// Pairs the user rejected before; never re-proposed (GRAPH-011).
+    pub skipped_rejected: usize,
+    /// Pairs the policy engine refused to send.
+    pub skipped_policy: usize,
+    /// Why nothing ran at all, when nothing did.
+    pub refusal: Option<String>,
 }
 
 /// An answer grounded in the vault's own passages (SRCH-010, AC-008).

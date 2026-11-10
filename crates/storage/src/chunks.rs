@@ -11,7 +11,7 @@
 //! during a migration and are never compared with each other.
 
 use marius_model::{Chunk, ChunkEmbedding, ChunkId, ContentHash, DocumentId, EmbeddingModel};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use time::OffsetDateTime;
 
 use crate::convert::{
@@ -250,6 +250,33 @@ pub fn embedding_for(
         vector,
         computed_at: OffsetDateTime::now_utc(),
     }
+}
+
+/// Every vector in the most populous embedding space, for discovery's
+/// candidate nomination. One space only: vectors from different models
+/// must never be compared, so the minority left over after a model change
+/// is ignored rather than mixed in.
+pub fn dominant_space_embeddings(conn: &Connection) -> Result<Vec<ChunkEmbedding>> {
+    let space: Option<String> = conn
+        .query_row(
+            "SELECT space_key FROM chunk_embedding
+             GROUP BY space_key ORDER BY COUNT(*) DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(space) = space else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare(
+        "SELECT chunk_id, document_id, space_key, model, dimensions, source_hash, vector,
+                computed_at
+         FROM chunk_embedding WHERE space_key = ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![space], row_to_embedding)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 #[cfg(test)]

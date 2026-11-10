@@ -12,7 +12,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod discovery;
 pub mod qa;
+pub mod summary;
 
 use marius_llm::ChatRequest;
 use marius_model::{Confidence, TagName};

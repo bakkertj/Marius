@@ -94,6 +94,10 @@ pub struct ModelSettings {
     pub summarization: Option<ModelChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_answering: Option<ModelChoice>,
+    /// Proposing semantic edges (GRAPH-007). Falls back to the tagging
+    /// model when unset — it is the same cheap classification shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship_discovery: Option<ModelChoice>,
 }
 
 /// User preferences.
