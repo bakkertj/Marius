@@ -3797,6 +3797,7 @@ dependencies = [
  "marius-indexing",
  "marius-markdown",
  "marius-model",
+ "marius-search",
  "marius-storage",
  "pretty_assertions",
  "pulldown-cmark",

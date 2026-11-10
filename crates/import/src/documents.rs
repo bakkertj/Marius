@@ -212,7 +212,9 @@ mod tests {
         let xref_at = out.len();
         write!(out, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).unwrap();
         for offset in &offsets {
-            write!(out, "{offset:010} 00000 n ").and_then(|()| writeln!(out)).unwrap();
+            write!(out, "{offset:010} 00000 n ")
+                .and_then(|()| writeln!(out))
+                .unwrap();
         }
         write!(
             out,

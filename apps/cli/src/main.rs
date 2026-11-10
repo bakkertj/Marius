@@ -125,6 +125,27 @@ enum Command {
     #[command(subcommand)]
     Plugin(PluginCommand),
 
+    /// Export a vault: its files plus a metadata sidecar carrying
+    /// identities, tag provenance, review decisions and asserted edges
+    /// (KB-014).
+    Export {
+        /// Destination directory.
+        dest: PathBuf,
+        /// Vault name. Omit when exactly one vault is open.
+        #[arg(long)]
+        vault: Option<String>,
+    },
+
+    /// Attach an export's metadata to this vault's files, matching by
+    /// path and adopting the exported identities (KB-014's migration).
+    ImportMetadata {
+        /// The marius-export.json from `marius export`.
+        sidecar: PathBuf,
+        /// Vault name. Omit when exactly one vault is open.
+        #[arg(long)]
+        vault: Option<String>,
+    },
+
     /// Replicate a vault against its configured backend: pull, apply,
     /// push (SYNC-004..011). `MARIUS_SYNC_TOKEN` supplies the bearer
     /// secret when the server requires one.
@@ -154,6 +175,18 @@ enum Command {
         limit: usize,
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// Fuzzy title/path matching instead of full-text (SRCH-006).
+        #[arg(long)]
+        fuzzy: bool,
+        /// Save this query under a name for `--saved` later.
+        #[arg(long)]
+        save: Option<String>,
+        /// Run a previously saved query by name.
+        #[arg(long)]
+        saved: Option<String>,
+        /// Sort keyword results: relevance (default), title, path, modified.
+        #[arg(long, default_value = "relevance")]
+        sort: String,
         /// `keyword` (default), `semantic`, or `hybrid` (SRCH-009).
         /// Semantic and hybrid need `marius embed` to have run and search
         /// one vault (name it unless exactly one is open).
@@ -181,6 +214,13 @@ enum Command {
 
     /// Explain the query language.
     HelpQuery,
+
+    /// List or delete saved searches (SRCH-006).
+    Searches {
+        /// Delete this saved search instead of listing.
+        #[arg(long)]
+        rm: Option<String>,
+    },
 
     /// The inference audit log: every model request, including refusals
     /// (AI-015, SEC-006).
@@ -695,6 +735,33 @@ fn run(cli: &Cli) -> Result<()> {
             Ok(())
         }
         Command::Plugin(command) => plugin_command(app, command, cli.json),
+        Command::Export { dest, vault } => {
+            let vault = one_vault(&app, vault.as_deref())?;
+            let sidecar = app.export_vault(&vault, dest)?;
+            println!(
+                "exported {} to {} (files/ + {})",
+                vault.name,
+                dest.display(),
+                sidecar.file_name().unwrap_or_default().to_string_lossy()
+            );
+            Ok(())
+        }
+        Command::ImportMetadata { sidecar, vault } => {
+            let vault = one_vault(&app, vault.as_deref())?;
+            let report = app.import_metadata(&vault, sidecar)?;
+            println!(
+                "{} matched, {} identities adopted, {} tag(s), {} rejection(s), {} edge(s)",
+                report.matched,
+                report.identities_adopted,
+                report.tags_applied,
+                report.rejections_applied,
+                report.relationships_applied
+            );
+            for path in &report.missing {
+                println!("  missing here: {path}");
+            }
+            Ok(())
+        }
         Command::Sync { vault, status } => {
             let vault = one_vault(&app, vault.as_deref())?;
             if *status {
@@ -733,10 +800,29 @@ fn run(cli: &Cli) -> Result<()> {
             query,
             limit,
             offset,
+            fuzzy,
+            save,
+            saved,
+            sort,
             mode,
             vault,
         } => {
-            let query = query.join(" ");
+            let mut query = query.join(" ");
+            if let Some(name) = saved {
+                query = app
+                    .saved_search(name)?
+                    .ok_or_else(|| anyhow::anyhow!("no saved search named {name:?}"))?;
+            }
+            if let Some(name) = save {
+                app.save_search(name, &query)?;
+                println!("saved {name:?} = {query:?}");
+            }
+            if *fuzzy {
+                for document in app.fuzzy_titles(&query, *limit)? {
+                    println!("{}\t{}", document.title, document.path);
+                }
+                return Ok(());
+            }
             if mode != "keyword" {
                 let vault = one_vault(&app, vault.as_deref())?;
                 let results = match mode.as_str() {
@@ -749,7 +835,7 @@ fn run(cli: &Cli) -> Result<()> {
                 render::semantic_results(&query, &results, cli.json);
                 return Ok(());
             }
-            let results = app.search(
+            let mut results = app.search(
                 &query,
                 SearchOptions {
                     limit: *limit,
@@ -757,6 +843,19 @@ fn run(cli: &Cli) -> Result<()> {
                     ..SearchOptions::default()
                 },
             )?;
+            match sort.as_str() {
+                "relevance" => {}
+                "title" => results
+                    .hits
+                    .sort_by(|a, b| a.document.title.cmp(&b.document.title)),
+                "path" => results
+                    .hits
+                    .sort_by(|a, b| a.document.path.as_str().cmp(b.document.path.as_str())),
+                "modified" => results
+                    .hits
+                    .sort_by_key(|hit| std::cmp::Reverse(hit.document.modified_at)),
+                other => anyhow::bail!("unknown sort {other:?}"),
+            }
             render::search_results(&query, &results, cli.json);
             Ok(())
         }
@@ -827,6 +926,24 @@ fn run(cli: &Cli) -> Result<()> {
                 }
             } else if answer.unanswered {
                 println!("\n(the notes do not answer this)");
+            }
+            Ok(())
+        }
+        Command::Searches { rm } => {
+            if let Some(name) = rm {
+                if app.remove_saved_search(name)? {
+                    println!("{name} removed");
+                } else {
+                    println!("no saved search named {name:?}");
+                }
+                return Ok(());
+            }
+            let searches = app.saved_searches()?;
+            if searches.is_empty() {
+                println!("no saved searches; `marius search <query> --save <name>` makes one");
+            }
+            for (name, query) in searches {
+                println!("{name:<20} {query}");
             }
             Ok(())
         }

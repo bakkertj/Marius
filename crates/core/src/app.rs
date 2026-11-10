@@ -2578,6 +2578,52 @@ impl Marius {
         Ok(document)
     }
 
+    // ----------------------------------------------- search conveniences
+
+    /// Fuzzy title/path matching (SRCH-006): the quick switcher's
+    /// forgiving half, for when exact words escape you.
+    pub fn fuzzy_titles(&self, query: &str, limit: usize) -> Result<Vec<Document>> {
+        let filter = documents::Filter::default();
+        let all = documents::list(self.db.conn(), &filter)?;
+        let labels: Vec<String> = all
+            .iter()
+            .map(|d| format!("{} {}", d.title, d.path))
+            .collect();
+        let pairs: Vec<(usize, &String)> = marius_search::fuzzy::rank(query, &labels, |l| l);
+        Ok(pairs
+            .into_iter()
+            .take(limit)
+            .map(|(index, _)| all[index].clone())
+            .collect())
+    }
+
+    /// Store a named query (SRCH-006, TAG-015).
+    pub fn save_search(&mut self, name: &str, query: &str) -> Result<()> {
+        // Refuse to save a query that will not parse: a saved search
+        // should never greet its owner with a syntax error later.
+        marius_search::parse(query)?;
+        Ok(marius_storage::saved_searches::save(
+            self.db.conn(),
+            name,
+            query,
+        )?)
+    }
+
+    pub fn saved_searches(&self) -> Result<Vec<(String, String)>> {
+        Ok(marius_storage::saved_searches::list(self.db.conn())?)
+    }
+
+    pub fn saved_search(&self, name: &str) -> Result<Option<String>> {
+        Ok(marius_storage::saved_searches::get(self.db.conn(), name)?)
+    }
+
+    pub fn remove_saved_search(&mut self, name: &str) -> Result<bool> {
+        Ok(marius_storage::saved_searches::remove(
+            self.db.conn(),
+            name,
+        )?)
+    }
+
     // ----------------------------------------------------- housekeeping
 
     /// Documents whose filenames will not open on Windows.

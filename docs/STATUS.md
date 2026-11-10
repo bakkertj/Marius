@@ -75,6 +75,13 @@ every platform, since the file is created on the Mac. Three behaviours:
   drawable (GRAPH-014). Assembly (`core::graph`) and the deterministic
   force simulation (`ui-gpui/graph.rs`) are headlessly tested; the canvas
   is the thin part.
+- **Search conveniences and migration**: fuzzy title matching
+  (`marius search --fuzzy`, shared matcher with the palette), saved
+  searches validated at save time (`--save`/`--saved`,
+  `marius searches`), sortable results; and `marius export` /
+  `marius import-metadata` carry a vault's *identities* — document ids,
+  tag provenance, review decisions, rejections, asserted edges — into a
+  re-opened copy by path match and id adoption (KB-014).
 - **Table editing (MD-013)**: inside a pipe-table row, Tab hops to the
   next cell (growing the row from the last), ⇧Tab hops back, Enter
   continues the table with an empty row, and Enter on an empty row ends

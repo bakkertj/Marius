@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **146 done, 19 partial, 7 ready, 22 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **154 done, 15 partial, 4 ready, 21 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -28,7 +28,7 @@ Totals of 194 requirement IDs: **146 done, 19 partial, 7 ready, 22 open**. Every
 | ARCH-006 | done | `storage::migrations` | SQLite for metadata, relations, indexes, sync state. |
 | ARCH-007 | open | `apps/sync-server` | PostgreSQL behind a service; phase 5. |
 | ARCH-008 | open | — | CloudKit adapter; phase 5. `SyncBackend::CloudKit` modelled. |
-| ARCH-009 | ready | `model::SyncBackend`, `changelog` | One backend per vault; journal records it. |
+| ARCH-009 | done | `SyncBackend`, per-backend cursor, bootstrap push | One authority per vault; switching re-bootstraps (`marius vault backend`). |
 | ARCH-010 | done | `core::search`, `storage::relationships` | Multi-vault search and cross-vault edges. |
 | ARCH-011 | done | `model::ids` | IDs independent of filename, path, vault. |
 | ARCH-012 | done | `model::provenance::Authorship` | AI may change metadata, never source content. |
@@ -54,7 +54,7 @@ Totals of 194 requirement IDs: **146 done, 19 partial, 7 ready, 22 open**. Every
 | KB-011 | done | `storage::revisions` | `history_is_newest_first_and_bodies_are_recoverable` |
 | KB-012 | done | `documents::set_archived`, `search::keep` | `kb_012_archived_documents_stay_searchable_unless_filtered` |
 | KB-013 | partial | `Document::external`, `index_attachment` | Flag honoured and attachments indexed; no UI to add an external reference. |
-| KB-014 | partial | `FRONTMATTER_ID_KEY`, `frontmatter::upsert_key` | Writeback mechanism exists; export/migration flow not built. |
+| KB-014 | done | `export_vault` / `import_metadata`, id adoption | `an_exported_vault_migrates_with_identity_and_judgement_intact` — identities, tag provenance, rejections and asserted edges survive the trip. |
 
 ## 3.2 Markdown authoring and rendering
 
@@ -110,7 +110,7 @@ Totals of 194 requirement IDs: **146 done, 19 partial, 7 ready, 22 open**. Every
 | TAG-012 | done | `ReviewState::{Locked,Rejected}`, `rejected_tag` | `a_rejected_tag_is_not_reproposed_even_by_a_different_model` |
 | TAG-013 | done | `tags::replace_machine_tags` | `reclassification_preserves_user_tags_and_drops_stale_machine_tags` |
 | TAG-014 | done | `model::MetadataValue` | `a_date_survives_a_round_trip_without_decaying_into_text` |
-| TAG-015 | partial | `documents::Filter`, `saved_search` table | Filtering done; table views and saved queries need the UI. |
+| TAG-015 | done | saved searches, `--sort`, tag counts/filters | Named queries (validated at save), sortable results, metadata filters — `saved_searches_round_trip_and_overwrite_by_name`. |
 | TAG-016 | open | — | P2. |
 
 ## 3.5 AI providers, policy and generated knowledge
@@ -145,7 +145,7 @@ Totals of 194 requirement IDs: **146 done, 19 partial, 7 ready, 22 open**. Every
 | SRCH-003 | done | FTS5 + `quote_phrase` + `snippet_for` | `srch_003_and_005_query_features_and_result_identity` |
 | SRCH-004 | done | `core::search::vault_scope` | `ac_009_cross_vault_links_and_global_search` |
 | SRCH-005 | done | `SearchHit::{vault_name,reference}` | `srch_003_and_005_query_features_and_result_identity` |
-| SRCH-006 | partial | `prefix='2 3 4'`, `saved_search` table | Prefix search done; fuzzy and saved searches not built. |
+| SRCH-006 | done | `search::fuzzy` (shared with the palette), `--fuzzy`, `--save/--saved` | Fuzzy, saved searches, filtering and ranking all in. |
 | SRCH-007 | done | `EmbeddingProvider`, `Marius::embed_vault`, `marius embed` | `embedding_is_idempotent_and_staleness_follows_the_content_hash` |
 | SRCH-008 | done | `markdown::chunk`, `storage::chunks` | `chunks_are_produced_only_when_asked_for` |
 | SRCH-009 | done | `embeddings::fuse_reciprocal_rank`, `hybrid_search`, `--mode` | `semantic_search_ranks_by_meaning_and_hybrid_fuses` |
@@ -235,14 +235,14 @@ Totals of 194 requirement IDs: **146 done, 19 partial, 7 ready, 22 open**. Every
 | ID | Status | Where | Test |
 |---|---|---|---|
 | SEC-001 | done | `config::ModelChoice::credential` | `a_saved_file_never_contains_a_credential` |
-| SEC-002 | ready | `model::policy` | Rules tested; no transmission path exists yet. |
+| SEC-002 | done | `marius-llm-policy` before every adapter call | `confidential_content_never_leaves_the_device`, `confidential_sources_keep_summaries_off_remote_models` — nothing transmits except through `decide`. |
 | SEC-003 | done | `VaultPath` refusal, `files::read_text` | `paths_refuse_to_escape_the_vault` |
 | SEC-004 | done | everything | `ac_017_everything_essential_works_with_no_network` |
 | SEC-005 | done | `VaultPolicy`, `document_policy` | `ac_016_a_local_only_policy_is_stored_...` |
 | SEC-006 | done | `inference::transmissions`, `marius audit` | `transmissions_count_only_content_that_left` |
-| SEC-007 | open | — | Needs the transport. |
+| SEC-007 | done | bearer auth server-side; client refuses plain HTTP beyond loopback | `plain_http_to_a_remote_host_is_refused`; TLS terminates at the documented reverse proxy. |
 | SEC-008 | done | `backup_to`, `integrity_check`, `rebuild_derived` | `a_backup_can_be_reopened`, `nfr_007_...` |
-| SEC-009 | ready | `Capability`, policy routing | Grants cannot widen a vault's policy by design. |
+| SEC-009 | done | one capability-checked door; no inference op exists for plugins yet | Plugin file access runs through the document service (source protection intact); inference is unreachable from plugins, so no grant can widen a vault's policy. |
 | SEC-010 | open | — | P2. |
 
 ## 6. Nonfunctional targets
@@ -266,7 +266,7 @@ Totals of 194 requirement IDs: **146 done, 19 partial, 7 ready, 22 open**. Every
 | AC-002 | done | `ac_002_an_obsidian_style_vault_opens_without_conversion` |
 | AC-003 | done | `ac_003_renaming_a_linked_document_keeps_identity_and_fixes_links`, `ac_003_moving_a_document_...` |
 | AC-004 | done | `ac_004_manual_tag_changes_are_reflected_immediately` |
-| AC-005 | partial | `ac_005_ai_tags_carry_provenance_and_never_touch_the_file` — the guarantee is tested; auto-tagging itself is not built |
+| AC-005 | done | `suggested_tags_arrive_with_provenance_and_an_audit_row` + `ac_005…` — auto-tagging runs and the original file is untouched. |
 | AC-006 | done | `ac_006_a_rejection_persists_across_reindexing` |
 | AC-007 | done | `semantic_search_ranks_by_meaning_and_hybrid_fuses` (conceptual match without the keyword). |
 | AC-008 | done | `a_grounded_answer_cites_real_passages_by_byte_range`; refusal honesty in the off-topic test. |

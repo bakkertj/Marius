@@ -549,3 +549,37 @@ pub fn reject_relationship(
     )?;
     Ok(())
 }
+
+/// Give an existing document a different id — the migration half of
+/// KB-014, when an export's identity must survive into a re-indexed
+/// vault. Children move with it; foreign keys are deferred to commit.
+pub fn adopt_document_id(conn: &Connection, from: DocumentId, to: DocumentId) -> Result<()> {
+    if from == to {
+        return Ok(());
+    }
+    conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+    let old = from.to_sql_blob();
+    let new = to.to_sql_blob();
+    conn.execute(
+        "UPDATE document SET id = ?2 WHERE id = ?1",
+        params![old, new],
+    )?;
+    for sql in [
+        "UPDATE document_tag SET document_id = ?2 WHERE document_id = ?1",
+        "UPDATE rejected_tag SET document_id = ?2 WHERE document_id = ?1",
+        "UPDATE document_name SET document_id = ?2 WHERE document_id = ?1",
+        "UPDATE document_alias SET document_id = ?2 WHERE document_id = ?1",
+        "UPDATE chunk SET document_id = ?2 WHERE document_id = ?1",
+        "UPDATE chunk_embedding SET document_id = ?2 WHERE document_id = ?1",
+        "UPDATE document_revision SET document_id = ?2 WHERE document_id = ?1",
+        "UPDATE pending_link SET document_id = ?2 WHERE document_id = ?1",
+        "UPDATE generated_note_provenance SET document_id = ?2 WHERE document_id = ?1",
+        "UPDATE relationship SET source_document = ?2 WHERE source_document = ?1",
+        "UPDATE relationship SET target_document = ?2 WHERE target_document = ?1",
+        "UPDATE rejected_relationship SET source_document = ?2 WHERE source_document = ?1",
+        "UPDATE rejected_relationship SET target_document = ?2 WHERE target_document = ?1",
+    ] {
+        conn.execute(sql, params![old, new])?;
+    }
+    Ok(())
+}

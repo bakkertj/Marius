@@ -1,5 +1,6 @@
 pub mod app;
 pub mod config;
+pub mod export;
 pub mod graph;
 pub mod plugins;
 pub mod search;
@@ -15,6 +16,7 @@ pub use app::{
     Summarized,
 };
 pub use config::{Config, ConfigError};
+pub use export::{MigrationReport, VaultExport};
 pub use graph::{EdgeStyle, GraphData, GraphEdge, GraphNode, GraphOptions};
 pub use search::{SearchHit, SearchOptions, SearchResults};
 pub use sync_client::SyncReport;

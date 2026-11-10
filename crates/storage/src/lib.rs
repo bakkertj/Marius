@@ -40,6 +40,7 @@ pub mod plugins;
 pub mod relationships;
 pub mod replica;
 pub mod revisions;
+pub mod saved_searches;
 pub mod search_index;
 pub mod tags;
 pub mod vaults;
