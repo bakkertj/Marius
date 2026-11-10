@@ -583,9 +583,11 @@ pub fn replace_machine_tags(
         format!(" AND tag_id NOT IN ({})", vec!["?"; keep.len()].join(", "))
     };
     let sql = format!(
+        // `+provenance`: see replace_file_tags — keep the planner on the
+        // document_id primary key.
         "DELETE FROM document_tag
          WHERE document_id = ?1
-           AND provenance = 'ai_generated'
+           AND +provenance = 'ai_generated'
            AND review NOT IN ('approved', 'locked'){exclusion}"
     );
     let mut args: Vec<rusqlite::types::Value> = vec![document.to_sql_blob().into()];
@@ -613,9 +615,13 @@ pub fn replace_file_tags(
         format!(" AND tag_id NOT IN ({})", vec!["?"; keep.len()].join(", "))
     };
     let sql = format!(
+        // `+provenance`: the unary plus stops SQLite from choosing the
+        // (provenance, review) index, whose 'derived' entries grow with
+        // the vault — scanning them per document made indexing O(n²) at
+        // 100k notes. The primary key on document_id is the right index.
         "DELETE FROM document_tag
          WHERE document_id = ?1
-           AND provenance = 'derived'
+           AND +provenance = 'derived'
            AND source IN ('inline', 'frontmatter')
            AND review NOT IN ('approved', 'locked'){exclusion}"
     );

@@ -528,10 +528,14 @@ fn replace_edges(
         let holes = vec!["?"; keep.len()].join(", ");
         format!(" AND target_document NOT IN ({holes}) AND source_document NOT IN ({holes})")
     };
+    // `+kind`: keep the planner on the source/target_document indexes —
+    // the (kind, review) index's entries grow with the vault, and
+    // scanning them per document is the O(n²) that sank 100k-note
+    // indexing in tags before the same hint.
     let sql = format!(
         "DELETE FROM relationship
          WHERE {owner}
-           AND kind IN ({kind_holes})
+           AND +kind IN ({kind_holes})
            AND provenance IN ({provenance_holes})
            AND review NOT IN ('approved', 'locked'){exclusion}"
     );

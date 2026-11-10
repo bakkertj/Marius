@@ -229,7 +229,13 @@ requires revisiting the four invariants.
 
 ## Honest gaps in what is marked done
 
-- **Performance is now measured, on a generated 10,000-document vault**
+- **Performance is now measured, on generated 10,000- and 100,000-document
+  vaults.** The 100k run found and killed a real quadratic: SQLite's
+  planner chose the low-selectivity `(provenance, review)` index for the
+  per-document derived-row deletes, scanning every derived row in the
+  vault for each document indexed — 30k notes took 104 s. The standard
+  `+column` planner hint pins it to the primary key; the same 30k now
+  takes 15 s and 100k indexes in 62 s, linear.
   (8.3 MB of Markdown, 19,835 links, 33,410 tag assignments) on Apple Silicon:
 
   | Target | Result |
@@ -237,7 +243,7 @@ requires revisiting the four invariants.
   | NFR-003: vault opens in ~2 s | **50 ms** to reconcile 10,000 unchanged documents |
   | NFR-004: search in ~200 ms | **under 10 ms** across five query shapes |
   | First full index (no target) | 21–23 s one-time, ~2.2 ms per document |
-  | NFR-005: 100,000 documents | list proven at that size; the store is not yet |
+  | NFR-005: 100,000 documents | **measured**: first index 62 s, unchanged pass 3.3 s, searches 70–140 ms, instant reopen, 544 MB database (revision bodies included) |
 
   NFR-002 still has no UI to measure against. The first index is single
   threaded and is the obvious candidate for `rayon`.

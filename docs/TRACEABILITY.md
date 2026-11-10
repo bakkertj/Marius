@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **137 done, 25 partial, 7 ready, 25 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **138 done, 24 partial, 7 ready, 25 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -253,7 +253,7 @@ Totals of 194 requirement IDs: **137 done, 25 partial, 7 ready, 25 open**. Every
 | NFR-002 | partial | WAL, batched transactions | Structurally supported; no UI to measure against. |
 | NFR-003 | done | directory pruning, single-query reconcile | **Measured: 50 ms** to reopen a 10,000-document vault (target ~2 s). |
 | NFR-004 | done | FTS5, weighted BM25, batched tag lookup | **Measured: <10 ms** across five query shapes on 10,000 documents (target ~200 ms). |
-| NFR-005 | partial | schema and indexes | GPUI list measured at **100,000 rows, 87 MB** (`docs/SPIKE-GPUI.md`); the store itself is untested at that size and progressive graph rendering is not built. |
+| NFR-005 | done | store + UI list measured at 100k | **Measured at 100,000 documents**: first index 62 s, unchanged pass 3.3 s, searches 70–140 ms, instant reopen; GPUI list at that size in `docs/SPIKE-GPUI.md`. Graph view degrades by truncation (GRAPH-014). |
 | NFR-006 | done | batching, `IndexReport::problems` | `an_unreadable_file_does_not_stop_the_pass` |
 | NFR-007 | done | `rebuild_derived`, `Thoroughness::Rebuild` | `nfr_007_a_rebuild_restores_search_without_losing_metadata` |
 | NFR-008 | partial | 503 tests incl. conflict detection | Compatibility regression tests await the plugin runtime. |
