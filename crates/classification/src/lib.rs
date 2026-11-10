@@ -53,7 +53,10 @@ pub fn tagging_request(
          with ONLY a JSON object with two keys. \"names\": every proper \
          name the note mentions — products and part numbers (e.g. \
          \"cisco-c9200l-48p-4x-e\"), program and project names, systems, \
-         vendors, protocols, standards, organisations, places. \"tags\": \
+         vendors, protocols, standards, organisations, places. Copy each \
+         name whole and verbatim: never shorten one, and never split one \
+         into its component words (\"falcon-9-block-5\" is one name — not \
+         \"falcon\", not \"falcon\" plus \"block\"). \"tags\": \
          at most {max_tags} lowercase tag strings, most relevant first, \
          built from those names first — the words the author would type \
          into search — then at most two broader topic tags. A bare name \
@@ -314,16 +317,16 @@ mod tests {
         // The prompt asks for {"names": [...], "tags": [...]} — naming
         // first is what makes models actually surface part numbers and
         // program names. Tags come first; a name the model extracted but
-        // failed to carry into "tags" (seen live: LINK-on-CALE, VM42f)
-        // is appended rather than lost, duplicates collapsing.
+        // failed to carry into "tags" (a live failure with real part
+        // numbers) is appended rather than lost, duplicates collapsing.
         let got = parse_suggestions(
-            r#"{"names": ["Project Beacon", "LINK-on-CALE", "VM42f"],
+            r#"{"names": ["Project Beacon", "GATE-on-MAST", "XR71f"],
                 "tags": ["project-beacon", "networking"]}"#,
             8,
         );
         assert_eq!(
             names(&got),
-            ["project-beacon", "networking", "link-on-cale", "vm42f"]
+            ["project-beacon", "networking", "gate-on-mast", "xr71f"]
         );
     }
 
