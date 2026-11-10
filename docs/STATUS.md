@@ -83,8 +83,12 @@ frontmatter, wiki links, callouts, math, templates) are documented in the
 - **Settings in the app (⌘,)**: per-task model configuration —
   provider, model, base URL, credential *name* (never the key,
   SEC-001), trusted-with-personal toggle — with a connection test that
-  lists a local Ollama's models and says whether the chosen one is
-  pulled; plus the vault's privacy floor and the auto-classify switch.
+  lists a local Ollama's models (saying whether the chosen one is
+  pulled) or dials a remote's `GET /models`, proving DNS, route, TLS
+  trust and credential without sending a word of note content (also
+  `marius model test <task>`); plus the vault's privacy floor and the
+  auto-classify switch. Failures print the full error cause chain, and
+  the footer shows a long status whole in a hover tooltip.
   Writes the same Config and VaultPolicy the CLI reads, so
   `marius model show` and the pane can never disagree.
 - **Search conveniences and migration**: fuzzy title matching
