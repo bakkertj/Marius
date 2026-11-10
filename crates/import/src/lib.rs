@@ -17,6 +17,7 @@ pub mod documents;
 pub mod email;
 pub mod html;
 pub mod msg;
+pub mod smime;
 
 /// One note ready to be written into a vault.
 #[derive(Debug, Clone, PartialEq, Eq)]

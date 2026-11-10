@@ -239,7 +239,9 @@ line.
   `.msg` (headers become frontmatter, attachments land beside the note
   with a clickable "Attachments" section, and attached PDFs/Word files
   are full-text searchable) and `.mbox` (one note per message, thread
-  identifiers kept). Names are made Windows-portable on the way in,
+  identifiers kept). An S/MIME-signed message is unwrapped — the real
+  body and attachments replace the `smime.p7m` wrapper, the signature
+  noted (not verified); an encrypted one is named for what it is. Names are made Windows-portable on the way in,
   collisions get numbered variants, everything indexes immediately.
   PDF (extractor fenced; textless scans refused with an OCR pointer),
   Word and EPUB extract to searchable Markdown;

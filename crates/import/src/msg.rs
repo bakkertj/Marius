@@ -106,6 +106,8 @@ pub fn import_msg(raw: &[u8]) -> Result<ImportedNote, ImportError> {
             .unwrap_or_else(|| format!("attachment-{}", index + 1));
         attachments.push(Attachment { file_name, bytes });
     }
+    let mut body_markdown = body_markdown;
+    crate::email::apply_smime(&mut front, &mut body_markdown, &mut attachments);
     if !attachments.is_empty() {
         front.push_str("attachments:\n");
         for attachment in &attachments {
@@ -314,6 +316,31 @@ mod tests {
             note.body
         );
         assert!(!note.body.contains("plain fallback"));
+    }
+
+    #[test]
+    fn a_signed_outlook_message_unwraps_to_its_real_body_and_attachments() {
+        // Work Outlook's shape: no body streams at all, one smime.p7m
+        // holding everything. A user imported one and got a subject
+        // heading, no body, and the wrapper as a hyperlink.
+        let raw = MsgBuilder::new()
+            .unicode("0037001F", "Dredging schedule")
+            .attachment("smime.p7m", include_bytes!("../tests/fixtures/signed.p7m"))
+            .build();
+        let note = import_msg(&raw).unwrap();
+        assert!(note.body.contains("Nine metres by March"), "{}", note.body);
+        assert!(note.body.contains("signed: smime"), "{}", note.body);
+        assert_eq!(
+            note.attachments.len(),
+            1,
+            "{:?}",
+            note.attachments
+                .iter()
+                .map(|a| &a.file_name)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(note.attachments[0].file_name, "schedule.csv");
+        assert!(!note.body.contains("smime.p7m"), "{}", note.body);
     }
 
     #[test]

@@ -10,6 +10,71 @@ use mail_parser::{MessageParser, MimeHeaders};
 
 use crate::{yaml_quote, Attachment, ImportError, ImportedNote};
 
+/// A MIME blob's body (HTML preferred, as Markdown) and attachments —
+/// shared by `.eml` import and S/MIME unwrapping, where the inner
+/// message is exactly such a blob.
+pub(crate) fn body_and_attachments(raw: &[u8]) -> Option<(String, Vec<Attachment>)> {
+    let message = MessageParser::default().parse(raw)?;
+    let body = match message.body_html(0) {
+        Some(html) => crate::html_to_markdown(&html).ok()?.trim().to_owned(),
+        None => message
+            .body_text(0)
+            .map(|text| text.trim().to_owned())
+            .unwrap_or_default(),
+    };
+    let mut attachments = Vec::new();
+    for (index, part) in message.attachments().enumerate() {
+        let name = part
+            .attachment_name()
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("attachment-{}", index + 1));
+        attachments.push(Attachment {
+            file_name: name,
+            bytes: part.contents().to_vec(),
+        });
+    }
+    Some((body, attachments))
+}
+
+/// An S/MIME message hides its real content in a `.p7m`: swap the
+/// wrapper for what it hid, or say honestly that it is encrypted.
+/// The signature is noted, not verified (the owner's own mail).
+pub(crate) fn apply_smime(
+    front: &mut String,
+    body_markdown: &mut String,
+    attachments: &mut Vec<Attachment>,
+) {
+    use crate::smime::{unwrap_wrapped_mime, Unwrapped};
+    if !body_markdown.trim().is_empty() && attachments.len() != 1 {
+        return;
+    }
+    match unwrap_wrapped_mime(attachments) {
+        Some((
+            position,
+            Unwrapped::Signed {
+                body_markdown: inner_body,
+                attachments: inner_attachments,
+            },
+        )) => {
+            attachments.remove(position);
+            attachments.extend(inner_attachments);
+            if body_markdown.trim().is_empty() {
+                *body_markdown = inner_body;
+            }
+            front.push_str("signed: smime (signature not verified)\n");
+        }
+        Some((_, Unwrapped::Encrypted)) => {
+            if body_markdown.trim().is_empty() {
+                *body_markdown = "This message is S/MIME **encrypted**: its content \
+                                  cannot be read without the recipient's private key."
+                    .to_owned();
+            }
+            front.push_str("encrypted: smime\n");
+        }
+        None => {}
+    }
+}
+
 /// One `.eml` message into one note.
 pub fn import_eml(raw: &[u8]) -> Result<ImportedNote, ImportError> {
     let message = MessageParser::default()
@@ -78,6 +143,8 @@ pub fn import_eml(raw: &[u8]) -> Result<ImportedNote, ImportError> {
             bytes: part.contents().to_vec(),
         });
     }
+    let mut body_markdown = body_markdown;
+    apply_smime(&mut front, &mut body_markdown, &mut attachments);
     if !attachments.is_empty() {
         front.push_str("attachments:\n");
         for attachment in &attachments {

@@ -18,6 +18,8 @@ zip = { workspace = true }
 quick-xml = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
+cms = { workspace = true }
+der = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
