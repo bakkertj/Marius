@@ -53,7 +53,7 @@ Totals of 194 requirement IDs: **154 done, 15 partial, 4 ready, 21 open**. Every
 | KB-010 | done | `documents::set_aliases`, `resolve_link` | `links_resolve_through_aliases` |
 | KB-011 | done | `storage::revisions` | `history_is_newest_first_and_bodies_are_recoverable` |
 | KB-012 | done | `documents::set_archived`, `search::keep` | `kb_012_archived_documents_stay_searchable_unless_filtered` |
-| KB-013 | partial | `Document::external`, `index_attachment` | Flag honoured and attachments indexed; no UI to add an external reference. |
+| KB-013 | partial | `Document::external`, `index_attachment` | Flag honoured and attachments indexed — PDF/DOCX by their text (`a_pdf_attachment_is_searchable_by_its_contents`); no UI to add an external reference. |
 | KB-014 | done | `export_vault` / `import_metadata`, id adoption | `an_exported_vault_migrates_with_identity_and_judgement_intact` — identities, tag provenance, rejections and asserted edges survive the trip. |
 
 ## 3.2 Markdown authoring and rendering
@@ -86,8 +86,8 @@ Totals of 194 requirement IDs: **154 done, 15 partial, 4 ready, 21 open**. Every
 | IM-005 | done | `core::create_document` → `index_path` | `indexing_a_single_path_works_for_a_watcher` |
 | IM-006 | done | `DocumentKind::Email`, open-in-place | `ac_011_a_pasted_email_becomes_ordinary_knowledge` |
 | IM-007 | done | `scan::DEFAULT_IGNORED_DIRS`, aliases, wiki links | `ac_002_an_obsidian_style_vault_opens_without_conversion` |
-| IM-008 | done | `import::{html,documents}`, `marius import` | PDF (extractor fenced against panics; scans refused with an OCR pointer), Word and HTML all searchable — `a_pdf_becomes_searchable_text…`, `a_docx_yields_its_paragraphs`. |
-| IM-009 | done | `import::email`, `marius import` | `an_eml_lands_with_headers_in_frontmatter_and_attachments_beside_it` |
+| IM-008 | done | `import::{html,documents}`, `marius import` | PDF (extractor fenced against panics; scans refused with an OCR pointer), Word and HTML all searchable — `a_pdf_becomes_searchable_text…`, `a_docx_yields_its_paragraphs`; attached PDFs/Word files indexed by content. |
+| IM-009 | done | `import::{email,msg}`, `marius import` | `an_eml_lands_with_headers_in_frontmatter_and_attachments_beside_it`, `an_outlook_msg_lands_with_its_pdf_searchable_by_content` |
 | IM-010 | done | watcher + OS file drop + clipboard palette entry | Watched folders, drag-in from the OS (drop anywhere, imports and opens) and "New note from clipboard". |
 | IM-011 | done | `import::email::import_mbox` | `an_mbox_becomes_one_note_per_message_with_thread_identifiers` — message_id/in_reply_to kept. |
 | IM-012 | partial | `import::documents::import_epub`, `Marius::import_url` | EPUB and the web clipper (`marius import --url`, chrome stripped) done; OCR and iOS Share Sheet remain. |

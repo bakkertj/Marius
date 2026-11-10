@@ -377,8 +377,13 @@ impl Workspace {
             cache: RefCell::new(HashMap::new()),
         });
         let editor = cx.new(|cx| Editor::new(cx, theme, resolver));
-        let search =
-            cx.new(|cx| Editor::single_line(cx, theme, "Search… (⌘K) · ?semantic · ??hybrid"));
+        let search = cx.new(|cx| {
+            Editor::single_line(
+                cx,
+                theme,
+                format!("Search… ({PRIMARY}K) · ?semantic · ??hybrid"),
+            )
+        });
         let palette_input = cx.new(|cx| Editor::single_line(cx, theme, "Type a command…"));
         let rename_input =
             cx.new(|cx| Editor::single_line(cx, theme, "new/path/and name.md — Enter renames"));
@@ -1832,8 +1837,25 @@ impl Workspace {
         };
         match resolved {
             Some((found, _)) => {
-                // Browsing stays in reading mode; that is what links are for.
-                self.open(found.document, cx);
+                // An attachment (a PDF, an image) is not editable text:
+                // hand it to the system viewer. Notes open in place.
+                let attachment = {
+                    let app = self.app.borrow();
+                    marius_storage::documents::get(app.database().conn(), found.document)
+                        .ok()
+                        .flatten()
+                        .filter(|d| d.kind == marius_model::DocumentKind::Attachment)
+                };
+                if let Some(doc) = attachment {
+                    let file = doc.path.to_fs(&self.vault.root);
+                    self.status = match open_with_system_viewer(&file) {
+                        Ok(()) => format!("opened {} in the system viewer", doc.path).into(),
+                        Err(e) => format!("cannot open {}: {e}", doc.path).into(),
+                    };
+                } else {
+                    // Browsing stays in reading mode; that is what links are for.
+                    self.open(found.document, cx);
+                }
             }
             None => self.status = format!("{target:?} does not resolve").into(),
         }
@@ -2144,7 +2166,7 @@ impl Workspace {
                             .iter()
                             .filter(|row| matches!(row, TreeRow::Document { .. }))
                             .count();
-                        format!("{documents} document(s) · ⌘N folder/name creates folders")
+                        format!("{documents} document(s) · {PRIMARY}N folder/name creates folders")
                     }),
             )
             .child(list)
@@ -2638,7 +2660,7 @@ impl Workspace {
                     .gap(px(14.))
                     .child(format!("ln {}, col {}", line + 1, column + 1))
                     .child(SharedString::from(format!(
-                        "{} · {} · ⌘K search · ⌘⇧P commands · ⌘E {} · ⌘⇧E split · ⌘G graph · ⌘T tags · ⌘⇧L {}",
+                        "{} · {} · {PRIMARY}K search · {PRIMARY_SHIFT}P commands · {PRIMARY}E {} · {PRIMARY_SHIFT}E split · {PRIMARY}G graph · {PRIMARY}T tags · {PRIMARY_SHIFT}L {}",
                         self.vault.name,
                         self.status,
                         match self.mode {
@@ -2785,5 +2807,37 @@ impl Render for Workspace {
             .child(self.render_status(cx))
             .children(self.render_palette(cx))
             .children(self.render_rename(cx))
+    }
+}
+
+/// What on-screen hints print for the keymap's `{primary}` modifier:
+/// the footer must name the key the fingers actually press.
+#[cfg(target_os = "macos")]
+const PRIMARY: &str = "⌘";
+#[cfg(not(target_os = "macos"))]
+const PRIMARY: &str = "Ctrl+";
+#[cfg(target_os = "macos")]
+const PRIMARY_SHIFT: &str = "⌘⇧";
+#[cfg(not(target_os = "macos"))]
+const PRIMARY_SHIFT: &str = "Ctrl+Shift+";
+
+/// Hand a file to the platform's default application — the only sane way
+/// to "open" a PDF or an image from a notes app.
+fn open_with_system_viewer(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(path).status()?;
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "start", ""])
+        .arg(path)
+        .status()?;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let status = std::process::Command::new("xdg-open").arg(path).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "the system viewer refused it ({status})"
+        )))
     }
 }

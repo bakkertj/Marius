@@ -64,6 +64,7 @@ notify-debouncer-full = "0.4"
 walkdir = "2"
 htmd = "0.2"
 boa_engine = "0.20"
+cfb = "0.16"
 mail-parser = "0.11"
 pdf-extract = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }

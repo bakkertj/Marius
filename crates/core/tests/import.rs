@@ -90,10 +90,87 @@ fn an_eml_lands_with_headers_in_frontmatter_and_attachments_beside_it() {
     let attachment = h.files.path().join(&attachment_dir).join("depths.csv");
     assert!(attachment.exists(), "{}", attachment.display());
 
+    // The note ends with a clickable list of what rode along (IM-011).
+    let text = std::fs::read_to_string(note.path.to_fs(&h.vault.root)).unwrap();
+    assert!(text.contains("## Attachments"), "{text}");
+    assert!(
+        text.contains("[depths.csv](<") && text.contains(" attachments/depths.csv>)"),
+        "{text}"
+    );
+
     // Importing the same file again does not overwrite (IM-003).
     let second = h.app.import_file(&vault, &eml, Some(&folder)).unwrap();
     assert_ne!(second.imported[0].path, note.path);
     assert!(second.imported[0].path.as_str().contains("(imported 2)"));
+}
+
+#[test]
+fn a_pdf_attachment_is_searchable_by_its_contents() {
+    let mut h = harness();
+    // A PDF dropped beside the notes — the exact shape an imported email's
+    // attachment lands in — must be findable by what it says, not only by
+    // its filename (IM-008).
+    std::fs::write(
+        h.files.path().join("harbour report.pdf"),
+        tiny_pdf("Dredging the western channel to nine metres."),
+    )
+    .unwrap();
+    let vault = h.vault.clone();
+    h.app.index(&vault).unwrap();
+
+    let hits = h
+        .app
+        .search("dredging", SearchOptions::default())
+        .unwrap()
+        .hits;
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0]
+        .document
+        .path
+        .as_str()
+        .ends_with("harbour report.pdf"));
+}
+
+/// A minimal but structurally honest PDF: one page, one text object,
+/// a correct xref. Mirrors the builder in marius-import's unit tests.
+fn tiny_pdf(text: &str) -> Vec<u8> {
+    use std::io::Write;
+    let stream = format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET");
+    let mut objects = Vec::new();
+    objects.push("<< /Type /Catalog /Pages 2 0 R >>".to_owned());
+    objects.push("<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned());
+    objects.push(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
+            .to_owned(),
+    );
+    objects.push(format!(
+        "<< /Length {} >>\nstream\n{stream}\nendstream",
+        stream.len()
+    ));
+    objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned());
+
+    let mut out = Vec::new();
+    out.extend_from_slice(b"%PDF-1.4\n");
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        write!(out, "{} 0 obj\n{object}\nendobj\n", index + 1).unwrap();
+    }
+    let xref_at = out.len();
+    write!(out, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).unwrap();
+    for offset in &offsets {
+        write!(out, "{offset:010} 00000 n ")
+            .and_then(|()| writeln!(out))
+            .unwrap();
+    }
+    write!(
+        out,
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF",
+        objects.len() + 1
+    )
+    .unwrap();
+    out
 }
 
 #[test]
@@ -127,6 +204,62 @@ fn an_mbox_becomes_one_note_per_message_with_thread_identifiers() {
     assert!(text.contains(r#"in_reply_to: "m1@x""#), "{text}");
     let hits = h.app.search("buoy", SearchOptions::default()).unwrap().hits;
     assert_eq!(hits.len(), 1);
+}
+
+#[test]
+fn an_outlook_msg_lands_with_its_pdf_searchable_by_content() {
+    use std::io::Write;
+    let mut h = harness();
+
+    // The shape work Outlook exports: an OLE compound file with MAPI
+    // property streams and an attachment storage.
+    let mut file = cfb::CompoundFile::create(std::io::Cursor::new(Vec::new())).unwrap();
+    let unicode =
+        |file: &mut cfb::CompoundFile<std::io::Cursor<Vec<u8>>>, path: &str, value: &str| {
+            let mut stream = file.create_stream(path).unwrap();
+            for unit in value.encode_utf16() {
+                stream.write_all(&unit.to_le_bytes()).unwrap();
+            }
+        };
+    unicode(&mut file, "/__substg1.0_0037001F", "Harbour works");
+    unicode(
+        &mut file,
+        "/__substg1.0_1000001F",
+        "The survey is attached.",
+    );
+    file.create_storage("/__attach_version1.0_#00000000")
+        .unwrap();
+    unicode(
+        &mut file,
+        "/__attach_version1.0_#00000000/__substg1.0_3707001F",
+        "survey.pdf",
+    );
+    let mut data = file
+        .create_stream("/__attach_version1.0_#00000000/__substg1.0_37010102")
+        .unwrap();
+    data.write_all(&tiny_pdf("Nine metres at the western mole."))
+        .unwrap();
+    drop(data);
+    let msg = h.inbox.path().join("harbour works.msg");
+    std::fs::write(&msg, file.into_inner().into_inner()).unwrap();
+
+    let vault = h.vault.clone();
+    let report = h.app.import_file(&vault, &msg, None).unwrap();
+    assert_eq!(report.imported.len(), 1);
+    let note = &report.imported[0];
+    assert_eq!(note.title, "Harbour works");
+
+    // The note links its attachment and the PDF's own words are indexed.
+    let text = std::fs::read_to_string(note.path.to_fs(&h.vault.root)).unwrap();
+    assert!(text.contains("## Attachments"), "{text}");
+    assert!(text.contains("[survey.pdf](<"), "{text}");
+    let hits = h
+        .app
+        .search("western mole", SearchOptions::default())
+        .unwrap()
+        .hits;
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].document.path.as_str().ends_with("survey.pdf"));
 }
 
 #[test]

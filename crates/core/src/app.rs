@@ -2451,6 +2451,12 @@ impl Marius {
                         .map_err(|e| CoreError::Inference(e.to_string()))?,
                 );
             }
+            "msg" => {
+                notes.push(
+                    marius_import::msg::import_msg(&bytes)
+                        .map_err(|e| CoreError::Inference(e.to_string()))?,
+                );
+            }
             "mbox" => {
                 let (parsed, failed) = marius_import::email::import_mbox(&bytes);
                 skipped = failed;
@@ -2476,7 +2482,7 @@ impl Marius {
             }
             other => {
                 return Err(CoreError::Inference(format!(
-                    "no importer for .{other} (markdown, txt, html, pdf, docx, epub, eml, mbox)"
+                    "no importer for .{other} (markdown, txt, html, pdf, docx, epub, eml, msg, mbox)"
                 )));
             }
         }
@@ -2561,18 +2567,32 @@ impl Marius {
             path = joined(&format!("{stem} (imported {counter}).md"))?;
         }
 
-        let document = self.create_document(vault, &path, &note.body)?;
-
-        // Attachments beside the note, under "<stem> attachments/".
+        // Attachments land beside the note, under "<stem> attachments/",
+        // and the note ends with a clickable list of them — an email's
+        // four PDFs should be one click away, not a folder hunt (IM-011).
+        let mut body = note.body.clone();
+        let mut targets = Vec::new();
         if !note.attachments.is_empty() {
             let stem = path.as_str().trim_end_matches(".md").to_owned();
-            let options = self.index_options(vault)?;
+            let folder_name = stem.rsplit('/').next().unwrap_or(&stem).to_owned();
+            body.push_str("\n\n## Attachments\n\n");
             for attachment in &note.attachments {
                 let name = marius_model::sanitize(&attachment.file_name);
                 let target = VaultPath::new(format!("{stem} attachments/{name}"))
                     .map_err(|e| CoreError::Inference(e.to_string()))?;
-                files::write_atomic_bytes(&target.to_fs(&vault.root), &attachment.bytes)?;
-                indexer::index_path(&mut self.db, vault, &target, &options)?;
+                // Angle brackets keep the spaces in the folder name legal.
+                body.push_str(&format!("- [{name}](<{folder_name} attachments/{name}>)\n"));
+                targets.push((target, attachment.bytes.clone()));
+            }
+        }
+
+        let document = self.create_document(vault, &path, &body)?;
+
+        if !targets.is_empty() {
+            let options = self.index_options(vault)?;
+            for (target, bytes) in &targets {
+                files::write_atomic_bytes(&target.to_fs(&vault.root), bytes)?;
+                indexer::index_path(&mut self.db, vault, target, &options)?;
             }
         }
         Ok(document)

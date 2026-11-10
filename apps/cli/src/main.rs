@@ -65,7 +65,7 @@ enum Command {
     Rebuild,
 
     /// Import external content: Markdown, text, HTML, PDF, Word,
-    /// EPUB, .eml, .mbox files — or a web page by URL
+    /// EPUB, .eml, Outlook .msg, .mbox files — or a web page by URL
     /// (IM-008/009/011/012). Everything indexes immediately.
     Import {
         /// Files to import.

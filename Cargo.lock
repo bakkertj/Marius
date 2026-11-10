@@ -390,6 +390,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfb"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fef29b910ef2b9dbecc60168d1568d643c633b0518af970c17e83bd5f6e2c94f"
+dependencies = [
+ "fnv",
+ "uuid",
+ "web-time",
+]
+
+[[package]]
 name = "cff-parser"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -703,6 +714,12 @@ dependencies = [
  "miniz_oxide",
  "zlib-rs",
 ]
+
+[[package]]
+name = "fnv"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "foldhash"
@@ -1520,6 +1537,7 @@ dependencies = [
 name = "marius-core"
 version = "0.1.0"
 dependencies = [
+ "cfb",
  "marius-classification",
  "marius-embeddings",
  "marius-import",
@@ -1560,6 +1578,7 @@ version = "0.1.0"
 name = "marius-import"
 version = "0.1.0"
 dependencies = [
+ "cfb",
  "htmd",
  "mail-parser",
  "marius-model",
@@ -1576,6 +1595,7 @@ name = "marius-indexing"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "marius-import",
  "marius-markdown",
  "marius-model",
  "marius-storage",

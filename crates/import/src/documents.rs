@@ -13,12 +13,9 @@ use crate::{yaml_quote, ImportError, ImportedNote};
 /// exotic files, so the call is fenced: a crash in the extractor is an
 /// import error, never an application abort.
 pub fn import_pdf(bytes: &[u8], fallback_title: &str) -> Result<ImportedNote, ImportError> {
-    let bytes = bytes.to_vec();
-    let extracted = std::panic::catch_unwind(move || pdf_extract::extract_text_from_mem(&bytes))
-        .map_err(|_| ImportError::Document("the PDF extractor crashed on this file".into()))?
-        .map_err(|e| ImportError::Document(format!("cannot read the PDF: {e}")))?;
-
-    let text = normalise_extracted(&extracted);
+    let text = pdf_text(bytes).ok_or_else(|| {
+        ImportError::Document("cannot read the PDF (or the extractor crashed on it)".into())
+    })?;
     if text.trim().is_empty() {
         return Err(ImportError::Document(
             "the PDF contains no extractable text (a scan needs OCR, which is not built)".into(),
@@ -27,17 +24,40 @@ pub fn import_pdf(bytes: &[u8], fallback_title: &str) -> Result<ImportedNote, Im
     Ok(note(fallback_title, "pdf", &text))
 }
 
+/// A PDF's text, or `None` when the file is unreadable — the extractor's
+/// known panics are fenced into `None` too, because an *indexing* caller
+/// must never let a bad attachment break a pass (NFR-006). A readable PDF
+/// with no text layer (a scan) comes back as `Some` of an empty string,
+/// so callers can tell "broken" from "needs OCR".
+pub fn pdf_text(bytes: &[u8]) -> Option<String> {
+    let bytes = bytes.to_vec();
+    let extracted = std::panic::catch_unwind(move || pdf_extract::extract_text_from_mem(&bytes))
+        .ok()?
+        .ok()?;
+    Some(normalise_extracted(&extracted))
+}
+
+/// A `.docx`'s text, or `None`; same contract as [`pdf_text`].
+pub fn docx_text(bytes: &[u8]) -> Option<String> {
+    docx_paragraphs(bytes).ok()
+}
+
 /// Extract a `.docx`'s paragraphs (IM-008). A DOCX is a zip holding
 /// `word/document.xml`; paragraphs are `<w:p>`, text runs `<w:t>`.
 pub fn import_docx(bytes: &[u8], fallback_title: &str) -> Result<ImportedNote, ImportError> {
+    let out = docx_paragraphs(bytes).map_err(ImportError::Document)?;
+    Ok(note(fallback_title, "docx", out.trim()))
+}
+
+fn docx_paragraphs(bytes: &[u8]) -> Result<String, String> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|e| ImportError::Document(format!("not a Word document: {e}")))?;
+        .map_err(|e| format!("not a Word document: {e}"))?;
     let mut xml = String::new();
     archive
         .by_name("word/document.xml")
-        .map_err(|e| ImportError::Document(format!("no word/document.xml: {e}")))?
+        .map_err(|e| format!("no word/document.xml: {e}"))?
         .read_to_string(&mut xml)
-        .map_err(|e| ImportError::Document(e.to_string()))?;
+        .map_err(|e| e.to_string())?;
 
     let mut reader = quick_xml::Reader::from_str(&xml);
     let mut out = String::new();
@@ -67,20 +87,14 @@ pub fn import_docx(bytes: &[u8], fallback_title: &str) -> Result<ImportedNote, I
                 paragraph.push_str(&t.unescape().unwrap_or_default());
             }
             Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => {
-                return Err(ImportError::Document(format!(
-                    "malformed document.xml: {e}"
-                )))
-            }
+            Err(e) => return Err(format!("malformed document.xml: {e}")),
             _ => {}
         }
     }
     if out.trim().is_empty() {
-        return Err(ImportError::Document(
-            "the document contains no text".into(),
-        ));
+        return Err("the document contains no text".into());
     }
-    Ok(note(fallback_title, "docx", out.trim()))
+    Ok(out)
 }
 
 /// Flatten an EPUB into one note (IM-012's EPUB half): each XHTML

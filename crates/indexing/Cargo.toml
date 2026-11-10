@@ -11,6 +11,7 @@ description = "Vault scanning, durable file writes and the indexing pipeline for
 marius-model = { workspace = true }
 marius-markdown = { workspace = true }
 marius-storage = { workspace = true }
+marius-import = { workspace = true }
 blake3 = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }

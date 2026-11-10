@@ -1,6 +1,7 @@
 /target/
 # The GPUI workspaces build outside the root workspace and are ~2.5 GB.
 /apps/desktop/target/
+/apps/sync-server/target/
 /crates/ui-gpui/target/
 **/*.rs.bk
 *.pdb

@@ -339,10 +339,12 @@ pub fn index_file(
     Ok(document.id)
 }
 
-/// Index a non-text file by its metadata only (KB-013, MD-005).
+/// Index a non-text file (KB-013, MD-005).
 ///
-/// An attachment is never read into memory or parsed; it exists in the index so
-/// that `![[diagram.png]]` resolves and so a filename is searchable.
+/// Every attachment exists in the index so that `![[diagram.png]]` resolves
+/// and so a filename is searchable. Formats with a text extractor (PDF,
+/// DOCX) additionally contribute their text to full-text search, so an
+/// email's attached report is findable by what it says (IM-008).
 fn index_attachment(
     conn: &Connection,
     vault: &Vault,
@@ -381,12 +383,37 @@ fn index_attachment(
             &IndexedText {
                 title: document.title.clone(),
                 path: document.path.to_string(),
+                body: attachment_text(&file.absolute, size).unwrap_or_default(),
                 ..Default::default()
             },
         )?;
     }
-    let _ = options;
     Ok(document.id)
+}
+
+/// How large an attachment the text extractors will chew on. Anything
+/// bigger is indexed by name alone; a single huge binary must not stall
+/// an indexing pass (NFR-002).
+const ATTACHMENT_TEXT_LIMIT: u64 = 32 * 1024 * 1024;
+
+/// Best-effort text from an attachment the extractors understand. A
+/// corrupt or unsupported file yields `None`, never an error — a bad
+/// attachment cannot break the pass (NFR-006).
+fn attachment_text(path: &std::path::Path, size: u64) -> Option<String> {
+    if size > ATTACHMENT_TEXT_LIMIT {
+        return None;
+    }
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !matches!(extension.as_str(), "pdf" | "docx") {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let text = match extension.as_str() {
+        "pdf" => marius_import::documents::pdf_text(&bytes)?,
+        _ => marius_import::documents::docx_text(&bytes)?,
+    };
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 fn build_document(

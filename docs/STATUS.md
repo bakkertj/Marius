@@ -226,12 +226,14 @@ line.
   arrive unreviewed for `marius link confirm/reject`, and a rejected pair
   is never re-proposed. Every request audited, policy-gated per source.
 - **Importers** — `marius import` takes Markdown, plain text, HTML
-  (converted, title and source in frontmatter), `.eml` (headers become
-  frontmatter, attachments land beside the note) and `.mbox` (one note
-  per message, thread identifiers kept). Names are made Windows-portable
-  on the way in, collisions get numbered variants, everything indexes
-  immediately. PDF (extractor fenced; textless scans refused with an
-  OCR pointer), Word and EPUB extract to searchable Markdown;
+  (converted, title and source in frontmatter), `.eml` and Outlook
+  `.msg` (headers become frontmatter, attachments land beside the note
+  with a clickable "Attachments" section, and attached PDFs/Word files
+  are full-text searchable) and `.mbox` (one note per message, thread
+  identifiers kept). Names are made Windows-portable on the way in,
+  collisions get numbered variants, everything indexes immediately.
+  PDF (extractor fenced; textless scans refused with an OCR pointer),
+  Word and EPUB extract to searchable Markdown;
   `marius import --url` clips a web page with its styles and scripts
   stripped; files dropped onto the window import in place and the
   palette captures the clipboard into a new note. OCR remains open.
@@ -274,7 +276,7 @@ requires revisiting the four invariants.
   GPUI is a fast-moving git dependency; the CLI exercises every service a UI
   would call.
 - **iOS** (ARCH-003, UI-007) — phase 7.
-- **Importers** for PDF, HTML, Word, `.eml` and `.mbox` (IM-008, IM-009,
+- **Importers** for PDF, HTML, Word, `.eml`, Outlook `.msg` and `.mbox` (IM-008, IM-009,
   IM-011). Markdown, plain text and pasted email already work by opening in
   place.
 - **Filesystem watching** (IM-010) — `indexer::index_path` is the entry point a
