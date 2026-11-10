@@ -401,6 +401,16 @@ pub fn set_archived(conn: &Connection, id: DocumentId, archived: bool) -> Result
 ///
 /// AI-007 forbids automatically lowering a restriction, which is enforced in
 /// `VaultPolicy::effective`; this function records the user's explicit choice.
+/// Set a document's authorship — the generation pipeline marking a new
+/// note `Derived`, or the user promoting one to `Promoted` (AI-014).
+pub fn set_authorship(
+    conn: &Connection,
+    id: DocumentId,
+    authorship: marius_model::Authorship,
+) -> Result<()> {
+    update_one(conn, id, "authorship", Some(authorship.as_str().to_owned()))
+}
+
 pub fn set_sensitivity(
     conn: &Connection,
     id: DocumentId,

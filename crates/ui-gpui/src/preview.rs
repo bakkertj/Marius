@@ -341,13 +341,12 @@ fn append_inline_event(inline: &mut Inline, event: Event, parser: &mut Parser) {
             with_state(|s| s.link = false);
             let range = start..inline.text.len();
             if !range.is_empty() {
-                inline.spans.push((
-                    range.clone(),
-                    SpanStyle {
-                        link: true,
-                        ..with_state(|s| *s)
-                    },
-                ));
+                // Only the click target. The *style* spans were pushed by
+                // the inner text events, which carried `link` through the
+                // running state — a second span over the whole range here
+                // would overlap them, and `StyledText` turns overlapping
+                // highlight ranges into runs longer than the text, which
+                // aborts the process (learned from a live ⌘E crash).
                 inline.links.push((range, dest_url.to_string()));
             }
         }
@@ -385,6 +384,37 @@ fn append_inline_event(inline: &mut Inline, event: Event, parser: &mut Parser) {
         }
         _ => {}
     }
+}
+
+/// Make a set of highlight ranges safe for `StyledText`, whose run
+/// arithmetic ABORTS the process on anything else: ranges must be sorted,
+/// non-overlapping, inside the text, and on character boundaries. The
+/// parser above produces exactly that by construction — this function is
+/// the guarantee that no future parse shape can crash the reading pane,
+/// only mis-colour it.
+fn sanitize_highlights(
+    text: &str,
+    mut highlights: Vec<(Range<usize>, HighlightStyle)>,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    highlights.sort_by_key(|(range, _)| (range.start, range.end));
+    let mut out: Vec<(Range<usize>, HighlightStyle)> = Vec::with_capacity(highlights.len());
+    let mut cursor = 0usize;
+    for (range, style) in highlights {
+        let mut start = range.start.max(cursor).min(text.len());
+        let mut end = range.end.min(text.len());
+        while start < text.len() && !text.is_char_boundary(start) {
+            start += 1;
+        }
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if start >= end {
+            continue;
+        }
+        out.push((start..end, style));
+        cursor = end;
+    }
+    out
 }
 
 /// If the inline is exactly one image, its range and destination.
@@ -517,11 +547,11 @@ impl Preview {
         for (range, style) in &inline.spans {
             let mut style = *style;
             if style.link {
-                if let Some((_, dest)) = inline
-                    .links
-                    .iter()
-                    .find(|(link_range, _)| link_range == range)
-                {
+                // The span may be a styled fragment inside the link, so
+                // match by containment rather than equality.
+                if let Some((_, dest)) = inline.links.iter().find(|(link_range, _)| {
+                    link_range.start <= range.start && range.end <= link_range.end
+                }) {
                     if let Some(target) = dest.strip_prefix(WIKI_SCHEME) {
                         style.broken = !self.context.wiki_resolves(target);
                     }
@@ -529,6 +559,7 @@ impl Preview {
             }
             highlights.push((range.clone(), self.highlight_for(style)));
         }
+        let highlights = sanitize_highlights(&inline.text, highlights);
 
         let click_targets: Vec<(Range<usize>, String)> = inline
             .links
@@ -985,5 +1016,119 @@ mod tests {
             }
         }
         check(&blocks(source));
+    }
+}
+
+#[cfg(test)]
+mod crash_regressions {
+    use super::*;
+
+    /// The invariant `StyledText` aborts on: runs must tile the text.
+    fn assert_safe(inline: &Inline) {
+        let mut highlights: Vec<(Range<usize>, HighlightStyle)> = inline
+            .spans
+            .iter()
+            .map(|(range, _)| (range.clone(), HighlightStyle::default()))
+            .collect();
+        // What render_inline hands to gpui after sanitising:
+        highlights = sanitize_highlights(&inline.text, highlights);
+        let mut cursor = 0usize;
+        for (range, _) in &highlights {
+            assert!(
+                range.start >= cursor,
+                "overlapping spans in {:?}: {:?}",
+                inline.text,
+                inline.spans
+            );
+            assert!(range.end <= inline.text.len());
+            assert!(inline.text.is_char_boundary(range.start));
+            assert!(inline.text.is_char_boundary(range.end));
+            cursor = range.end;
+        }
+    }
+
+    fn inlines_of(markdown: &str) -> Vec<Inline> {
+        fn walk(blocks: &[Block], out: &mut Vec<Inline>) {
+            for block in blocks {
+                match block {
+                    Block::Heading { inline, .. } | Block::Paragraph(inline) => {
+                        out.push(inline.clone())
+                    }
+                    Block::Quote(children) => walk(children, out),
+                    Block::List { items, .. } => {
+                        for item in items {
+                            walk(&item.blocks, out);
+                        }
+                    }
+                    Block::Table { head, rows } => {
+                        out.extend(head.iter().cloned());
+                        for row in rows {
+                            out.extend(row.iter().cloned());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        // The same pipeline render uses: wiki links become real links first.
+        walk(&parse_blocks(&wikify(markdown)), &mut out);
+        out
+    }
+
+    #[test]
+    fn a_plain_link_produces_one_span_not_two() {
+        // The ⌘E abort: inner link text pushed a span AND the link wrapper
+        // pushed an identical one; StyledText's runs then summed past the
+        // text and the process died with "invalid text run".
+        let inlines = inlines_of("See [[alexandria]] and the [survey](s.md).");
+        for inline in &inlines {
+            assert_safe(inline);
+        }
+        let inline = &inlines[0];
+        assert_eq!(inline.links.len(), 2);
+        let link_spans = inline.spans.iter().filter(|(_, s)| s.link).count();
+        assert_eq!(
+            link_spans, 2,
+            "one span per link\nspans: {:?}\nlinks: {:?}\ntext: {:?}",
+            inline.spans, inline.links, inline.text
+        );
+    }
+
+    #[test]
+    fn styled_content_inside_links_stays_non_overlapping() {
+        for markdown in [
+            "*[[emphasised link]]*",
+            "[**bold** middle *italic*](dest.md)",
+            "[`code in a link`](dest.md)",
+            "**[[bold wiki]]** and ~~[gone](x.md)~~",
+            "[outer **inner [[deep]]** tail](x.md)",
+        ] {
+            for inline in inlines_of(markdown) {
+                assert_safe(&inline);
+            }
+        }
+    }
+
+    #[test]
+    fn the_sanitizer_defuses_hostile_ranges() {
+        // Belt and braces: even ranges the parser should never produce
+        // must come out orderly rather than aborting the app.
+        let text = "héllo wörld";
+        let style = HighlightStyle::default();
+        let hostile = vec![
+            (3..9, style), // starts inside 'é'
+            (0..usize::MAX, style),
+            (5..5, style),  // empty
+            (2..4, style),  // overlaps the first after sorting
+            (8..30, style), // runs past the end
+        ];
+        let clean = sanitize_highlights(text, hostile);
+        let mut cursor = 0;
+        for (range, _) in &clean {
+            assert!(range.start >= cursor && range.end <= text.len());
+            assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
+            cursor = range.end;
+        }
     }
 }

@@ -33,6 +33,7 @@ pub mod changelog;
 pub mod chunks;
 pub mod convert;
 pub mod documents;
+pub mod generated;
 pub mod inference;
 pub mod migrations;
 pub mod relationships;
