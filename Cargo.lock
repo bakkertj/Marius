@@ -808,6 +808,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "marius-core",
  "marius-indexing",
  "marius-model",

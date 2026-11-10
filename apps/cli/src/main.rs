@@ -274,6 +274,7 @@ enum ModelCommand {
 }
 
 fn main() -> std::process::ExitCode {
+    reset_sigpipe();
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
@@ -288,6 +289,17 @@ fn main() -> std::process::ExitCode {
             }
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+/// Restore the default SIGPIPE disposition on Unix. Rust ignores it so
+/// writes return errors, which turns `marius search | head` into a panic
+/// ("failed printing to stdout: Broken pipe"). A CLI should die quietly
+/// mid-pipe like every other Unix tool.
+fn reset_sigpipe() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 }
 

@@ -52,13 +52,16 @@ jobs:
             > /tmp/smoke/notes/pharos.md
           printf '# Other\n\nAnother note.\n' > /tmp/smoke/notes/other.md
           BIN=./target/debug/marius
-          $BIN --data-dir /tmp/smoke/data vault add Smoke /tmp/smoke/notes
-          $BIN --data-dir /tmp/smoke/data search harbour | grep -q pharos
-          $BIN --data-dir /tmp/smoke/data search 'tag:history' | grep -q pharos
-          $BIN --data-dir /tmp/smoke/data graph pharos | grep -q other
-          $BIN --data-dir /tmp/smoke/data rename other renamed
+          # Capture, then grep: `| grep -q` closes the pipe on first match,
+          # and under pipefail the producer's SIGPIPE death fails the step.
+          run() { "$BIN" --data-dir /tmp/smoke/data "$@"; }
+          run vault add Smoke /tmp/smoke/notes
+          run search harbour        | grep pharos
+          run search 'tag:history'  | grep pharos
+          run graph pharos          | grep other
+          run rename other renamed
           grep -q 'renamed' /tmp/smoke/notes/pharos.md
-          $BIN --data-dir /tmp/smoke/data doctor | grep -q 'database:      ok'
+          run doctor | grep 'database:      ok'
           echo "smoke test passed"
 
       - name: Smoke test the CLI (Windows)
