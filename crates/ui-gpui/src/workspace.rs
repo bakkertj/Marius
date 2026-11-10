@@ -51,7 +51,8 @@ actions!(
         CloseTab,
         NextTab,
         PreviousTab,
-        OpenSettings
+        OpenSettings,
+        RenameNote
     ]
 );
 
@@ -92,6 +93,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new(key(format!("{primary}-b")), ToggleBacklinks, None),
         // Settings (⌘, — the platform convention).
         KeyBinding::new(key(format!("{primary}-,")), OpenSettings, None),
+        // Rename (and move) the open note; F2 is the convention
+        // Windows fingers expect, and it is free on macOS too.
+        KeyBinding::new("f2", RenameNote, None),
         // Tabs (UI-006).
         KeyBinding::new(key(format!("{primary}-shift-t")), NewTab, None),
         KeyBinding::new(key(format!("{primary}-w")), CloseTab, None),
@@ -124,6 +128,7 @@ enum PaletteAction {
     CloseTab,
     DailyNote,
     CaptureClipboard,
+    RenameNote,
     NewFromTemplate(String),
     Reindex,
     ToggleReading,
@@ -338,6 +343,11 @@ pub struct Workspace {
     palette_input: Entity<Editor>,
     palette_items: Option<Vec<PaletteItem>>,
     palette_selected: usize,
+    /// The rename prompt (F2): a single input prefilled with the open
+    /// note's path; Enter renames (and moves, when the path changes
+    /// folder), Escape dismisses.
+    rename_input: Entity<Editor>,
+    rename_open: bool,
     /// The backlinks/related side panel (⌘B, UI-005): refreshed when
     /// the open document changes, not per frame.
     /// Template staged by the palette for the next ⌘N (MD-011).
@@ -370,6 +380,8 @@ impl Workspace {
         let search =
             cx.new(|cx| Editor::single_line(cx, theme, "Search… (⌘K) · ?semantic · ??hybrid"));
         let palette_input = cx.new(|cx| Editor::single_line(cx, theme, "Type a command…"));
+        let rename_input =
+            cx.new(|cx| Editor::single_line(cx, theme, "new/path/and name.md — Enter renames"));
         let preview_base = Rc::new(VaultPreviewContext {
             app: app.clone(),
             vault: vault.id,
@@ -388,6 +400,8 @@ impl Workspace {
         cx.subscribe_in(&search, window, Self::on_search_event)
             .detach();
         cx.subscribe_in(&palette_input, window, Self::on_palette_event)
+            .detach();
+        cx.subscribe_in(&rename_input, window, Self::on_rename_event)
             .detach();
         cx.subscribe_in(&editor, window, Self::on_editor_event)
             .detach();
@@ -452,6 +466,8 @@ impl Workspace {
             palette_input,
             palette_items: None,
             palette_selected: 0,
+            rename_input,
+            rename_open: false,
             pending_template: None,
             backlinks_open: false,
             neighbourhood: None,
@@ -1251,6 +1267,121 @@ impl Workspace {
         cx.notify();
     }
 
+    /// F2: rename or move the open note, links rewritten either way
+    /// (MD-007, AC-003). One input, prefilled with the current path:
+    /// change the name to rename, change the folders to move, or both.
+    fn open_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_document.is_none() {
+            self.status = "no document to rename".into();
+            cx.notify();
+            return;
+        }
+        let current = self.open_path.to_string();
+        self.rename_open = true;
+        self.rename_input
+            .update(cx, |input, cx| input.set_text(&current, cx));
+        window.focus(&self.rename_input.read(cx).focus_handle(cx));
+        cx.notify();
+    }
+
+    fn close_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rename_open = false;
+        let handle = self.editor.read(cx).focus_handle(cx);
+        window.focus(&handle);
+        cx.notify();
+    }
+
+    fn apply_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.open_document else { return };
+        let typed = self.rename_input.read(cx).text().trim().to_owned();
+        self.close_rename(window, cx);
+        if typed.is_empty() || typed == self.open_path.as_ref() {
+            return;
+        }
+
+        // Folders first (a move), then the leaf (a rename); either half
+        // alone is fine, and both rewrite inbound links.
+        let (folder, leaf) = match typed.rsplit_once('/') {
+            Some((parent, leaf)) => (Some(parent.to_owned()), leaf.to_owned()),
+            None => (None, typed.clone()),
+        };
+        let current_folder = self
+            .open_path
+            .as_ref()
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.to_owned());
+        let current_leaf = self
+            .open_path
+            .as_ref()
+            .rsplit_once('/')
+            .map(|(_, leaf)| leaf.to_owned())
+            .unwrap_or_else(|| self.open_path.to_string());
+
+        let mut links = 0usize;
+        let mut outcome: Result<(), String> = Ok(());
+        if folder != current_folder {
+            let parent = match &folder {
+                Some(parent) => match VaultPath::new(parent.clone()) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        self.status = format!("rename: {error}").into();
+                        cx.notify();
+                        return;
+                    }
+                },
+                None => None,
+            };
+            match self.app.borrow_mut().move_document(id, parent.as_ref()) {
+                Ok(report) => links += report.links_rewritten,
+                Err(error) => outcome = Err(error.to_string()),
+            }
+        }
+        if outcome.is_ok() && leaf != current_leaf {
+            match self.app.borrow_mut().rename_document(id, &leaf) {
+                Ok(report) => links += report.links_rewritten,
+                Err(error) => outcome = Err(error.to_string()),
+            }
+        }
+
+        match outcome {
+            Ok(()) => {
+                // Refresh everything the path feeds.
+                if let Ok(document) = self.app.borrow().document(id) {
+                    self.open_path = document.path.to_string().into();
+                    self.open_title = document.title.clone().into();
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.title = document.title.clone().into();
+                    }
+                    *self.preview_base.base.borrow_mut() = Some(document.path);
+                }
+                self.status = if links > 0 {
+                    format!("renamed · {links} inbound link(s) rewritten").into()
+                } else {
+                    "renamed".into()
+                };
+                self.rebuild_tree(cx);
+                self.refresh_open_tags();
+                self.persist_ui_state();
+            }
+            Err(error) => self.status = format!("rename: {error}").into(),
+        }
+        cx.notify();
+    }
+
+    fn on_rename_event(
+        &mut self,
+        _: &Entity<Editor>,
+        event: &EditorEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            EditorEvent::Cancelled => self.close_rename(window, cx),
+            EditorEvent::Submitted => self.apply_rename(window, cx),
+            _ => {}
+        }
+    }
+
     /// ⌘⇧P: open the palette with everything runnable right now —
     /// built-in actions plus every enabled plugin's commands (UI-006).
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1260,6 +1391,7 @@ impl Workspace {
             ("Close tab", PaletteAction::CloseTab),
             ("Open today's daily note", PaletteAction::DailyNote),
             ("New note from clipboard", PaletteAction::CaptureClipboard),
+            ("Rename or move this note (F2)", PaletteAction::RenameNote),
             ("Save document", PaletteAction::Save),
             ("Suggest tags for this note", PaletteAction::SuggestTags),
             ("Toggle reading view", PaletteAction::ToggleReading),
@@ -1380,6 +1512,7 @@ impl Workspace {
             PaletteAction::NewTab => self.new_tab(window, cx),
             PaletteAction::CloseTab => self.close_tab(self.active_tab, window, cx),
             PaletteAction::CaptureClipboard => self.capture_clipboard(window, cx),
+            PaletteAction::RenameNote => self.open_rename(window, cx),
             PaletteAction::DailyNote => {
                 let vault = self.vault.clone();
                 let result = self.app.borrow_mut().daily_note(&vault);
@@ -2361,6 +2494,49 @@ impl Workspace {
         Some(panel.into_any_element())
     }
 
+    /// The F2 rename prompt, when open.
+    fn render_rename(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.rename_open {
+            return None;
+        }
+        let theme = self.theme;
+        Some(
+            div()
+                .id("rename-overlay")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .occlude()
+                .on_click(cx.listener(|this, _, window, cx| this.close_rename(window, cx)))
+                .child(
+                    div()
+                        .id("rename-panel")
+                        .occlude()
+                        .mx_auto()
+                        .mt(px(110.))
+                        .w(px(560.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.elevated)
+                        .shadow_lg()
+                        .child(
+                            div()
+                                .px(px(12.))
+                                .pt(px(8.))
+                                .text_size(px(11.))
+                                .text_color(theme.muted)
+                                .child(
+                                    "Rename or move — change the name, the folders, or both;                                      inbound links are rewritten",
+                                ),
+                        )
+                        .child(div().p(px(8.)).child(self.rename_input.clone())),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The palette overlay (UI-006), when open: input on top, ranked
     /// matches below, Enter or click to run, Escape to dismiss.
     fn render_palette(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -2521,6 +2697,7 @@ impl Render for Workspace {
                 };
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &RenameNote, window, cx| this.open_rename(window, cx)))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.close_tab(this.active_tab, window, cx)
@@ -2607,5 +2784,6 @@ impl Render for Workspace {
             )
             .child(self.render_status(cx))
             .children(self.render_palette(cx))
+            .children(self.render_rename(cx))
     }
 }
