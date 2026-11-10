@@ -12,7 +12,7 @@ implemented and where it is tested.
 | **ready** | The contract, data model and storage exist; the behaviour does not. |
 | **open** | Not started. |
 
-Totals of 194 requirement IDs: **103 done, 20 partial, 33 ready, 38 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
+Totals of 194 requirement IDs: **111 done, 20 partial, 26 ready, 37 open**. Every ID in the specification appears below exactly once, and these totals match the rows — `crates/core/tests/traceability.rs` checks both against the specification on every `cargo test`, so this table cannot drift silently.
 
 ---
 
@@ -35,7 +35,7 @@ Totals of 194 requirement IDs: **103 done, 20 partial, 33 ready, 38 open**. Ever
 | ARCH-013 | partial | `model::Authorship::Derived` | Modelled, filterable, indexed; generation not built. |
 | ARCH-014 | ready | `model::plugin` | Manifest, capabilities, diagnostics modelled. |
 | ARCH-015 | done | `DocumentKind::Email` | Email is knowledge, not a mail client. |
-| ARCH-016 | ready | `model::policy` | Types and combination rules done; engine not built. |
+| ARCH-016 | done | `marius-llm-policy::decide` | The decision procedure, with the locality table asserted row by row. |
 
 ## 3.1 Vaults and document management
 
@@ -100,7 +100,7 @@ Totals of 194 requirement IDs: **103 done, 20 partial, 33 ready, 38 open**. Ever
 | TAG-002 | done | `tags::{of_document,documents_with,counts}` | `tag_counts_include_unused_tags` |
 | TAG-003 | done | `tags::documents_matching`, `search::query` | `boolean_tag_queries_combine_and_or_and_not` |
 | TAG-004 | done | `scan`, `frontmatter::tags`, `replace_file_tags` | `inline_and_frontmatter_tags_are_indexed_with_their_source` |
-| TAG-005 | ready | `DocumentTag::ai_generated` | Storage and provenance done; classifier not built. |
+| TAG-005 | done | `marius-classification`, `Marius::suggest_tags`, `marius tag suggest` | `suggested_tags_arrive_with_provenance_and_an_audit_row` |
 | TAG-006 | done | `provenance::is_machine_writable`, `tags::assign` | `manual_tags_are_never_replaced_by_the_classifier` |
 | TAG-007 | done | `Provenance`, `tags::approve` | `approving_promotes_an_ai_tag_and_then_protects_it` |
 | TAG-008 | done | `TagName::new`, `tags::ensure`, aliases | `an_alias_routes_a_proposal_to_the_existing_tag` |
@@ -117,21 +117,21 @@ Totals of 194 requirement IDs: **103 done, 20 partial, 33 ready, 38 open**. Ever
 
 | ID | Status | Where | Notes |
 |---|---|---|---|
-| AI-001 | ready | `config::ModelChoice` | Provider, model, base URL, credential reference. |
-| AI-002 | open | `crates/llm` | Adapters not built. |
+| AI-001 | done | `llm::openai::OpenAiCompatible`, `ModelChoice` | One adapter for OpenRouter, self-hosted and any `/v1/chat/completions`; locality declared, key by env name. |
+| AI-002 | done | `llm::ollama::Ollama` | Chat, model listing, liveness; socket-level tests; verified against a live daemon. |
 | AI-003 | ready | `config::ModelSettings`, `InferenceTask` | Per-task model selection modelled. |
 | AI-004 | done | everything above | `ac_017_everything_essential_works_with_no_network` |
-| AI-005 | ready | `model::policy` | Types done; engine not built. |
-| AI-006 | ready | `Sensitivity`, `Locality`, `VaultPolicy::permits_provider` | Selection rules expressed and tested. |
+| AI-005 | done | `llm-policy::locality_permitted` | `the_locality_table_is_exactly_as_documented` |
+| AI-006 | done | `ProviderProfile::trusted_for_personal`, `--trusted` | `personal_content_needs_trust_to_go_remote` |
 | AI-007 | done | `Sensitivity::default`, `VaultPolicy::effective` | `a_sensitivity_declared_in_frontmatter_...only_tightens` |
 | AI-008 | done | `Sensitivity::across` | `strictest_level_wins_across_a_prompt` |
 | AI-009 | done | `Authorship`, `Provenance` | Enforced in storage, not just intended. |
-| AI-010 | partial | `VaultPolicy::auto_classify`, `changelog` | Flag and audit trail exist; classifier not built. |
+| AI-010 | partial | `suggest_tags(apply)`, review flow | Suggestions land unreviewed for approval; background auto-classification on index still off. |
 | AI-011 | ready | `GeneratedNoteProvenance`, `Citation` | Table migrated; generation not built. |
 | AI-012 | done | `Authorship::Derived`, `is:generated` | `ai_012_generated_notes_are_filterable` |
 | AI-013 | ready | `GeneratedNoteProvenance::allows_in_place_regeneration` | Rule implemented and tested; no generator to apply it. |
 | AI-014 | ready | `Authorship::Promoted` | Modelled and protected. |
-| AI-015 | ready | `InferenceRecord` | Table migrated with cost and token fields. |
+| AI-015 | done | `storage::inference`, `marius audit` | Every request audited, refusals included; tokens and duration recorded. |
 | AI-016 | partial | `VaultPolicy`, `config` | Per-vault rules and prompt IDs modelled. |
 | AI-017 | done | `VaultPath` traversal refusal, `Capability` | `paths_refuse_to_escape_the_vault` |
 | AI-018 | open | — | P2. |
@@ -239,7 +239,7 @@ Totals of 194 requirement IDs: **103 done, 20 partial, 33 ready, 38 open**. Ever
 | SEC-003 | done | `VaultPath` refusal, `files::read_text` | `paths_refuse_to_escape_the_vault` |
 | SEC-004 | done | everything | `ac_017_everything_essential_works_with_no_network` |
 | SEC-005 | done | `VaultPolicy`, `document_policy` | `ac_016_a_local_only_policy_is_stored_...` |
-| SEC-006 | ready | `inference_record`, `changelog` | Journal live; inference log awaits inference. |
+| SEC-006 | done | `inference::transmissions`, `marius audit` | `transmissions_count_only_content_that_left` |
 | SEC-007 | open | — | Needs the transport. |
 | SEC-008 | done | `backup_to`, `integrity_check`, `rebuild_derived` | `a_backup_can_be_reopened`, `nfr_007_...` |
 | SEC-009 | ready | `Capability`, policy routing | Grants cannot widen a vault's policy by design. |

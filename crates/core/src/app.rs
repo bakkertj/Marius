@@ -20,7 +20,9 @@ use marius_model::{
     ContentHash, Document, DocumentId, DocumentKind, DocumentTag, Relationship, RelationshipKind,
     RevisionCause, Tag, TagName, Vault, VaultId, VaultPath, VaultPolicy,
 };
+use marius_model::{GlobalDocumentId, InferenceOutcome, InferenceRecord, InferenceTask};
 use marius_search::Query;
+use marius_storage::inference;
 use marius_storage::{
     documents, relationships, revisions, search_index, tags, Database, StorageError,
 };
@@ -53,6 +55,8 @@ pub enum CoreError {
     NotEditable(VaultPath, DocumentKind),
     #[error("{0} is write-protected")]
     WriteProtected(VaultPath),
+    #[error("inference failed: {0}")]
+    Inference(String),
     #[error("invalid name {0:?}: {1}")]
     InvalidName(String, String),
     /// A name Marius will not author because it breaks on another platform.
@@ -1123,6 +1127,184 @@ impl Marius {
         crate::graph::assemble(self.db.conn(), vault, options)
     }
 
+    // ------------------------------------------------------ inference
+
+    /// Propose tags for one document with the configured model (TAG-005).
+    ///
+    /// The privacy policy engine rules first, and *every* request becomes an
+    /// audit row — approved, denied, or nothing-eligible alike (AI-015,
+    /// SEC-006). With `apply`, accepted suggestions are stored as
+    /// `ai_generated`/unreviewed assignments; rejected and pinned tags are
+    /// skipped by the storage gate, not by hope (TAG-006, TAG-012).
+    pub fn suggest_tags(&mut self, id: DocumentId, apply: bool) -> Result<SuggestedTags> {
+        use marius_llm::ChatProvider;
+
+        let document = self.document(id)?;
+        let text = self.read(&document)?;
+        let policy = self.vault_policy(document.vault)?;
+        let sensitivity = policy.effective(document.sensitivity);
+        let global = GlobalDocumentId::new(document.vault, document.id);
+
+        let choice = self.config.models.tagging.clone();
+        let profiles: Vec<marius_llm_policy::ProviderProfile> =
+            choice.iter().map(|c| c.profile()).collect();
+        let decision =
+            marius_llm_policy::decide(&policy, InferenceTask::Tagging, sensitivity, &profiles);
+
+        let (profile, choice) = match decision {
+            marius_llm_policy::Decision::Approved { provider, .. } => (
+                provider,
+                choice.expect("approved implies a configured choice"),
+            ),
+            marius_llm_policy::Decision::Denied { reason } => {
+                let record = InferenceRecord::denied(
+                    InferenceTask::Tagging,
+                    sensitivity,
+                    vec![global],
+                    reason.clone(),
+                );
+                inference::record(self.db.conn(), &record)?;
+                return Ok(SuggestedTags::refused(record, reason));
+            }
+            marius_llm_policy::Decision::NoEligibleProvider { reason } => {
+                let mut record = InferenceRecord::denied(
+                    InferenceTask::Tagging,
+                    sensitivity,
+                    vec![global],
+                    reason.clone(),
+                );
+                record.outcome = InferenceOutcome::NoEligibleProvider;
+                inference::record(self.db.conn(), &record)?;
+                return Ok(SuggestedTags::refused(record, reason));
+            }
+        };
+
+        // Vocabulary: the vault's tags, most used first (TAG-008).
+        let mut counted = tags::counts(self.db.conn(), Some(document.vault))?;
+        counted.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        let vocabulary: Vec<marius_model::TagName> = counted
+            .into_iter()
+            .filter(|(_, count)| *count > 0)
+            .map(|(tag, _)| tag.canonical_name)
+            .collect();
+
+        let request =
+            marius_classification::tagging_request(&document.title, &text, &vocabulary, 8);
+
+        let client: Box<dyn ChatProvider> = match profile.name.as_str() {
+            "ollama" => Box::new(marius_llm::ollama::Ollama::new(
+                choice
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| marius_llm::ollama::DEFAULT_BASE_URL.to_owned()),
+            )),
+            _ => {
+                // Credential by name from the environment; the platform
+                // keystore is the intended home, the environment is the
+                // portable least common denominator (SEC-001: the config
+                // holds the *name*, never the key).
+                let key = match &choice.credential {
+                    Some(name) => match std::env::var(name) {
+                        Ok(key) => Some(key),
+                        Err(_) => {
+                            let reason =
+                                format!("credential {name:?} is not set in the environment");
+                            let mut record = InferenceRecord::denied(
+                                InferenceTask::Tagging,
+                                sensitivity,
+                                vec![global],
+                                reason.clone(),
+                            );
+                            record.outcome = InferenceOutcome::NoEligibleProvider;
+                            inference::record(self.db.conn(), &record)?;
+                            return Ok(SuggestedTags::refused(record, reason));
+                        }
+                    },
+                    None => None,
+                };
+                let base = choice.base_url.clone().ok_or_else(|| {
+                    CoreError::Inference(format!(
+                        "provider {:?} needs a base_url in the configuration",
+                        profile.name
+                    ))
+                })?;
+                Box::new(marius_llm::openai::OpenAiCompatible::new(
+                    profile.name.clone(),
+                    base,
+                    profile.locality,
+                    key,
+                ))
+            }
+        };
+
+        let started = OffsetDateTime::now_utc();
+        let clock = std::time::Instant::now();
+        let mut record = InferenceRecord::denied(
+            InferenceTask::Tagging,
+            sensitivity,
+            vec![global],
+            String::new(),
+        );
+        record.provider = Some(profile.name.clone());
+        record.model = Some(choice.model.clone());
+        record.locality = Some(profile.locality);
+        record.started_at = started;
+
+        match client.chat(&choice.model, &request) {
+            Ok(response) => {
+                record.outcome = InferenceOutcome::Completed;
+                record.reason = format!("tagging via {}", profile.name);
+                record.prompt_tokens = response.prompt_tokens;
+                record.completion_tokens = response.completion_tokens;
+                record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+                inference::record(self.db.conn(), &record)?;
+
+                let suggestions = marius_classification::parse_suggestions(&response.text, 8);
+                let mut applied = Vec::new();
+                let mut skipped = Vec::new();
+                if apply {
+                    for suggestion in &suggestions {
+                        let tag =
+                            tags::ensure(self.db.conn(), Some(document.vault), &suggestion.name)?;
+                        let assignment = marius_model::DocumentTag::ai_generated(
+                            document.id,
+                            tag.id,
+                            response.model.clone(),
+                            suggestion.confidence,
+                        );
+                        match tags::assign(self.db.conn(), &assignment)? {
+                            tags::Assigned::Inserted | tags::Assigned::Updated => {
+                                applied.push(suggestion.name.clone());
+                            }
+                            tags::Assigned::SkippedRejected | tags::Assigned::SkippedProtected => {
+                                skipped.push(suggestion.name.clone());
+                            }
+                        }
+                    }
+                }
+                Ok(SuggestedTags {
+                    record,
+                    reason: format!("{} suggestion(s)", suggestions.len()),
+                    suggestions,
+                    applied,
+                    skipped,
+                })
+            }
+            Err(error) => {
+                record.outcome = InferenceOutcome::ProviderError;
+                record.reason = error.to_string();
+                record.duration_ms = Some(clock.elapsed().as_millis() as u64);
+                inference::record(self.db.conn(), &record)?;
+                Err(CoreError::Inference(error.to_string()))
+            }
+        }
+    }
+
+    /// The inference audit log, newest first (AI-015, SEC-006).
+    pub fn inference_log(&self, limit: usize) -> Result<Vec<InferenceRecord>> {
+        Ok(inference::recent(self.db.conn(), limit)?)
+    }
+
     // ----------------------------------------------------- housekeeping
 
     /// Documents whose filenames will not open on Windows.
@@ -1238,6 +1420,32 @@ struct RewritePlan {
     /// spans address this exact string.
     text: String,
     edits: Vec<rewrite::Edit>,
+}
+
+/// The outcome of one tagging request (TAG-005), refusals included.
+#[derive(Debug)]
+pub struct SuggestedTags {
+    /// The audit row this request produced — there is always one (AI-015).
+    pub record: InferenceRecord,
+    /// Human-sized summary: the engine's refusal reason, or a count.
+    pub reason: String,
+    pub suggestions: Vec<marius_classification::TagSuggestion>,
+    /// Stored (with `apply`): new or refreshed machine assignments.
+    pub applied: Vec<marius_model::TagName>,
+    /// Refused by the storage gate: rejected or pinned (TAG-006, TAG-012).
+    pub skipped: Vec<marius_model::TagName>,
+}
+
+impl SuggestedTags {
+    fn refused(record: InferenceRecord, reason: String) -> Self {
+        Self {
+            record,
+            reason,
+            suggestions: Vec::new(),
+            applied: Vec::new(),
+            skipped: Vec::new(),
+        }
+    }
 }
 
 /// What `apply_external_changes` did.

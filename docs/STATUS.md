@@ -4,7 +4,7 @@ What works today, what is designed but not built, and what is next. Precise
 per-requirement status is in [TRACEABILITY.md](TRACEABILITY.md), which is
 checked against the specification on every `cargo test`.
 
-**As of this writing: 619 tests (542 core + 77 UI), zero clippy warnings, formatted.**
+**As of this writing: 643 tests (566 core + 77 UI), zero clippy warnings, formatted.**
 
 ## Platform position
 
@@ -124,21 +124,30 @@ line.
   completed when their target appears.
 - **Housekeeping** — `doctor`, backup, integrity check, full index rebuild that
   keeps every piece of authoritative metadata.
+- **The privacy policy engine and AI tagging** — `marius model set tagging
+  ollama <model>` then `marius tag suggest <note> --apply`. Every request
+  passes `marius-llm-policy::decide` first: `NoInference` material is denied
+  outright, `Confidential` material is pinned to local models (a self-hosted
+  server is *not* local), `Personal` material goes remote only to providers
+  the user marked trusted, and one restricted source restricts the whole
+  request. Every request — refusals included — becomes an audit row
+  (`marius audit`), with tokens, duration, and whether content left the
+  device. Proposals land as `ai_generated`/unreviewed for `marius tag
+  approve/reject`; rejections remain durable against reclassification.
+  Adapters: Ollama (verified against a live daemon) and OpenAI-compatible
+  (OpenRouter/self-hosted), keys by environment-variable name only.
 
 ## Designed and stored for, but not built
 
 The contracts and database tables exist; the behaviour does not. Nothing here
 requires revisiting the four invariants.
 
-- **AI providers and the policy engine.** `Sensitivity`, `Locality`,
-  `InferenceTask`, `VaultPolicy` and `InferenceRecord` are implemented and
-  tested, including the rules that one confidential source restricts a whole
-  request and that a restriction never relaxes automatically. There is no
-  provider adapter and no transmission path, so there is currently nothing that
-  *could* send a document anywhere.
-- **Automatic tagging.** `DocumentTag::ai_generated`, provenance, confidence,
-  review states, rejection suppression and `replace_machine_tags` are all done
-  and tested. What is missing is the component that calls a model.
+- **AI behaviours beyond tagging.** The policy engine (`marius-llm-policy`),
+  the Ollama and OpenAI-compatible adapters, the audit log and automatic
+  tag suggestion are **built and live** — see "Works today". Embeddings,
+  semantic search, summarisation, grounded Q&A and relationship discovery
+  still await their components; the policy engine and audit log they must
+  pass through are already in place.
 - **Embeddings and semantic search.** Chunking, chunk storage, vectors keyed by
   embedding space, staleness detection and cosine similarity are done. There is
   no embedding client and no hybrid ranking.

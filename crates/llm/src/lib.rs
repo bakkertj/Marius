@@ -1,18 +1,81 @@
 //! # Model provider adapters
 //!
-//! Interchangeable clients for OpenRouter, OpenAI-compatible endpoints and
-//! locally hosted models such as Ollama.
+//! Interchangeable clients for locally hosted models (Ollama) and
+//! OpenAI-compatible endpoints (AI-001, AI-002).
 //!
-//! Requirements: AI-001, AI-002, AI-003, AI-016.
-//!
-//! Not yet implemented, and deliberately not implemented before
-//! `marius-llm-policy`: an adapter that can reach the network before anything
-//! decides whether it may is the wrong order to build these two in. Model
-//! selection is already expressed in `marius_core::config::ModelSettings`,
-//! keyed by `marius_model::InferenceTask`, and credentials are referenced by
-//! name rather than stored (SEC-001).
-//!
-//! See `docs/STATUS.md` for what is built and `docs/TRACEABILITY.md` for the
-//! per-requirement position.
+//! Built *after* `marius-llm-policy`, deliberately: nothing in this crate
+//! decides whether a request may run. Callers obtain a
+//! [`marius_llm_policy::Decision`] first, write the audit row, and only then
+//! reach for a client here. Credentials are passed in by the caller, who
+//! got them from the platform credential store by name — they are never
+//! read from configuration (SEC-001).
 
 #![forbid(unsafe_code)]
+
+use std::time::Duration;
+
+use marius_model::Locality;
+use serde::{Deserialize, Serialize};
+
+pub mod ollama;
+pub mod openai;
+
+/// One chat-style request. Small on purpose: the features that need more
+/// (tool use, streaming) can grow the type when they exist.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatRequest {
+    /// Instructions that frame the task.
+    pub system: String,
+    /// The content to work on.
+    pub user: String,
+    /// 0.0 for extraction-like tasks (tagging), higher for prose.
+    pub temperature: f32,
+    pub max_tokens: Option<u32>,
+}
+
+/// What came back, with the accounting the audit log wants (AI-015).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatResponse {
+    pub text: String,
+    pub model: String,
+    pub prompt_tokens: Option<u32>,
+    pub completion_tokens: Option<u32>,
+}
+
+/// A provider that can run a chat request, blocking the calling thread.
+///
+/// Blocking is the right shape here: every caller is either a CLI command
+/// or a background worker, and an async runtime in the core would buy
+/// nothing but colour.
+pub trait ChatProvider {
+    fn name(&self) -> &str;
+    fn locality(&self) -> Locality;
+    fn chat(&self, model: &str, request: &ChatRequest) -> Result<ChatResponse, LlmError>;
+}
+
+/// Why a provider call failed. `Unreachable` is ordinary life for a local
+/// daemon that is not running, and callers degrade gracefully on it (AI-004).
+#[derive(Debug, thiserror::Error)]
+pub enum LlmError {
+    #[error("cannot reach {endpoint}: {source}")]
+    Unreachable {
+        endpoint: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("{endpoint} answered HTTP {status}: {body}")]
+    Http {
+        endpoint: String,
+        status: u16,
+        body: String,
+    },
+    #[error("unexpected response from {endpoint}: {detail}")]
+    Protocol { endpoint: String, detail: String },
+}
+
+pub(crate) fn http_client(timeout: Duration) -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .build()
+        .expect("constructing an HTTP client cannot fail with these options")
+}

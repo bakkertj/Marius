@@ -54,6 +54,33 @@ pub struct ModelChoice {
     /// Base URL for a self-hosted or OpenAI-compatible endpoint (AI-001).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Where this endpoint runs, for the policy engine (AI-005). Omitted,
+    /// it is inferred: `ollama` is local, anything else is remote — the
+    /// conservative reading. Set `self_hosted` for your own server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locality: Option<marius_model::Locality>,
+    /// The user trusts this non-local provider with `Personal` material
+    /// (AI-006). Meaningless for local providers; defaults to not trusted.
+    #[serde(default)]
+    pub trusted_for_personal: bool,
+}
+
+impl ModelChoice {
+    /// The provider as the policy engine sees it.
+    pub fn profile(&self) -> marius_llm_policy::ProviderProfile {
+        let locality = self.locality.unwrap_or(if self.provider == "ollama" {
+            marius_model::Locality::Local
+        } else {
+            marius_model::Locality::Remote
+        });
+        marius_llm_policy::ProviderProfile {
+            name: self.provider.clone(),
+            model: self.model.clone(),
+            locality,
+            trusted_for_personal: self.trusted_for_personal
+                || locality == marius_model::Locality::Local,
+        }
+    }
 }
 
 /// Which model answers which question (AI-003).
@@ -266,6 +293,8 @@ mod tests {
                     model: "llama3.2".into(),
                     credential: None,
                     base_url: Some("http://localhost:11434".into()),
+                    locality: None,
+                    trusted_for_personal: false,
                 }),
                 ..ModelSettings::default()
             },
@@ -287,6 +316,8 @@ mod tests {
                     model: "some-model".into(),
                     credential: Some("marius/openrouter".into()),
                     base_url: None,
+                    locality: None,
+                    trusted_for_personal: false,
                 }),
                 ..ModelSettings::default()
             },

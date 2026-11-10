@@ -70,13 +70,18 @@ jobs:
           Set-Content -Path smoke\notes\pharos.md -Value "# Pharos`n`nIt stood at the harbour. #history`n`nSee [[other]].`n"
           Set-Content -Path smoke\notes\other.md -Value "# Other`n`nAnother note.`n"
           $bin = ".\target\debug\marius.exe"
+          # `-notmatch` over an ARRAY of lines filters the non-matching
+          # lines (truthy whenever any line misses), so join first.
+          function Out-Text([string[]]$command) {
+            (& $bin --data-dir smoke\data @command | Out-String)
+          }
           & $bin --data-dir smoke\data vault add Smoke smoke\notes
-          if ((& $bin --data-dir smoke\data search harbour) -notmatch 'pharos') { throw 'text search failed' }
-          if ((& $bin --data-dir smoke\data search 'tag:history') -notmatch 'pharos') { throw 'tag search failed' }
-          if ((& $bin --data-dir smoke\data graph pharos) -notmatch 'other') { throw 'graph failed' }
+          if ((Out-Text @('search', 'harbour')) -notmatch 'pharos') { throw 'text search failed' }
+          if ((Out-Text @('search', 'tag:history')) -notmatch 'pharos') { throw 'tag search failed' }
+          if ((Out-Text @('graph', 'pharos')) -notmatch 'other') { throw 'graph failed' }
           & $bin --data-dir smoke\data rename other renamed
           if ((Get-Content smoke\notes\pharos.md -Raw) -notmatch 'renamed') { throw 'link rewrite failed' }
-          if ((& $bin --data-dir smoke\data doctor) -notmatch 'database:      ok') { throw 'doctor failed' }
+          if ((Out-Text @('doctor')) -notmatch 'database:\s+ok') { throw 'doctor failed' }
           Write-Host "smoke test passed"
 
   fmt:

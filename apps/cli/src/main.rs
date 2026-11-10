@@ -87,6 +87,17 @@ enum Command {
     /// Explain the query language.
     HelpQuery,
 
+    /// The inference audit log: every model request, including refusals
+    /// (AI-015, SEC-006).
+    Audit {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// Show or set which model handles which task (AI-003).
+    #[command(subcommand)]
+    Model(ModelCommand),
+
     /// Print a document.
     Show {
         /// `vault:path`, or just `path` when one vault is open.
@@ -198,6 +209,45 @@ enum TagCommand {
     Approve { document: String, tag: String },
     /// List a document's tags with their provenance.
     List { document: String },
+    /// Ask the configured model to propose tags (TAG-005). The privacy
+    /// policy engine rules first, and the request is audited either way.
+    Suggest {
+        document: String,
+        /// Store accepted proposals as unreviewed machine assignments.
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum ModelCommand {
+    /// Current model configuration.
+    Show,
+    /// Configure the model for a task: tagging, embedding, summarization
+    /// or question_answering.
+    Set {
+        task: String,
+        /// `ollama`, `openrouter`, or any OpenAI-compatible name.
+        provider: String,
+        model: String,
+        /// Endpoint, e.g. http://127.0.0.1:11434 — required for anything
+        /// but local Ollama.
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Environment variable holding the API key. The key itself is
+        /// never stored (SEC-001).
+        #[arg(long)]
+        credential: Option<String>,
+        /// local, self_hosted or remote. Inferred from the provider name
+        /// when omitted.
+        #[arg(long)]
+        locality: Option<String>,
+        /// Trust this non-local provider with Personal material (AI-006).
+        #[arg(long)]
+        trusted: bool,
+    },
+    /// Remove the model for a task.
+    Clear { task: String },
 }
 
 fn main() -> std::process::ExitCode {
@@ -269,6 +319,36 @@ fn run(cli: &Cli) -> Result<()> {
             render::search_results(&query, &results, cli.json);
             Ok(())
         }
+        Command::Audit { limit } => {
+            let rows = app.inference_log(*limit)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+                return Ok(());
+            }
+            if rows.is_empty() {
+                println!("no inference has been requested");
+            }
+            for r in rows {
+                let provider = r.provider.as_deref().unwrap_or("—");
+                let model = r.model.as_deref().unwrap_or("—");
+                let sent = if r.left_the_device() {
+                    " [left device]"
+                } else {
+                    ""
+                };
+                println!(
+                    "{}  {:<22} {:<18} {provider}/{model}{sent}\n    {}",
+                    r.started_at
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_default(),
+                    r.task.to_string(),
+                    r.outcome.to_string(),
+                    r.reason
+                );
+            }
+            Ok(())
+        }
+        Command::Model(command) => model_command(&mut app, command, cli.json),
         Command::HelpQuery => {
             print!("{}", render::QUERY_HELP);
             Ok(())
@@ -528,10 +608,141 @@ fn tag_command(app: &mut Marius, command: &TagCommand, json: bool) -> Result<()>
             }
             Ok(())
         }
+        TagCommand::Suggest { document, apply } => {
+            let (_, found) = DocumentRef::resolve(app, document)?;
+            let result = app.suggest_tags(found.id, *apply)?;
+            if json {
+                let names: Vec<&str> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "reason": result.reason,
+                        "suggestions": names,
+                        "applied": result.applied.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+                        "skipped": result.skipped.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+                        "outcome": result.record.outcome.as_str(),
+                    })
+                );
+                return Ok(());
+            }
+            if result.suggestions.is_empty() {
+                println!("no suggestions: {}", result.reason);
+                return Ok(());
+            }
+            for s in &result.suggestions {
+                let mark = if result.applied.contains(&s.name) {
+                    "+"
+                } else if result.skipped.contains(&s.name) {
+                    "×"
+                } else {
+                    "·"
+                };
+                println!("  {mark} {}", s.name);
+            }
+            if *apply {
+                println!(
+                    "{} applied, {} skipped (rejected or pinned); review with `marius tags approve/reject`",
+                    result.applied.len(),
+                    result.skipped.len()
+                );
+            } else {
+                println!("(dry run; --apply stores them as unreviewed proposals)");
+            }
+            Ok(())
+        }
         TagCommand::List { document } => {
             let (_, found) = DocumentRef::resolve(app, document)?;
             let assignments = app.document_tags(found.id)?;
             render::document_tags(&assignments, json);
+            Ok(())
+        }
+    }
+}
+
+fn model_command(app: &mut Marius, command: &ModelCommand, json: bool) -> Result<()> {
+    use marius_core::config::ModelChoice;
+    fn slot<'a>(
+        config: &'a mut marius_core::Config,
+        task: &str,
+    ) -> Result<&'a mut Option<ModelChoice>> {
+        let models = &mut config.models;
+        Ok(match task {
+            "tagging" => &mut models.tagging,
+            "embedding" => &mut models.embedding,
+            "summarization" => &mut models.summarization,
+            "question_answering" | "qa" => &mut models.question_answering,
+            other => anyhow::bail!(
+                "unknown task {other:?}; expected tagging, embedding, summarization or question_answering"
+            ),
+        })
+    }
+    match command {
+        ModelCommand::Show => {
+            let models = &app.config().models;
+            if json {
+                println!("{}", serde_json::to_string_pretty(models)?);
+                return Ok(());
+            }
+            for (task, choice) in [
+                ("tagging", &models.tagging),
+                ("embedding", &models.embedding),
+                ("summarization", &models.summarization),
+                ("question_answering", &models.question_answering),
+            ] {
+                match choice {
+                    Some(c) => {
+                        let profile = c.profile();
+                        println!(
+                            "{task:<20} {}/{} ({}{})",
+                            c.provider,
+                            c.model,
+                            profile.locality,
+                            if profile.trusted_for_personal
+                                && profile.locality != marius_model::Locality::Local
+                            {
+                                ", trusted with personal"
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                    None => println!("{task:<20} —"),
+                }
+            }
+            Ok(())
+        }
+        ModelCommand::Set {
+            task,
+            provider,
+            model,
+            base_url,
+            credential,
+            locality,
+            trusted,
+        } => {
+            let locality = locality
+                .as_deref()
+                .map(str::parse::<marius_model::Locality>)
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut config = app.config().clone();
+            *slot(&mut config, task)? = Some(ModelChoice {
+                provider: provider.clone(),
+                model: model.clone(),
+                credential: credential.clone(),
+                base_url: base_url.clone(),
+                locality,
+                trusted_for_personal: *trusted,
+            });
+            app.set_config(config)?;
+            println!("{task} → {provider}/{model}");
+            Ok(())
+        }
+        ModelCommand::Clear { task } => {
+            let mut config = app.config().clone();
+            *slot(&mut config, task)? = None;
+            app.set_config(config)?;
+            println!("{task} cleared");
             Ok(())
         }
     }
