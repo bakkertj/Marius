@@ -100,6 +100,8 @@ impl ChatProvider for Ollama {
             eval_count: Option<u32>,
             #[serde(default)]
             model: Option<String>,
+            #[serde(default)]
+            done_reason: Option<String>,
         }
         #[derive(Deserialize)]
         struct Message {
@@ -121,6 +123,7 @@ impl ChatProvider for Ollama {
             model: reply.model.unwrap_or_else(|| model.to_owned()),
             prompt_tokens: reply.prompt_eval_count,
             completion_tokens: reply.eval_count,
+            truncated: reply.done_reason.as_deref() == Some("length"),
         })
     }
 }

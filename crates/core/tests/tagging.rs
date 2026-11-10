@@ -11,6 +11,15 @@ use marius_model::{InferenceOutcome, Provenance, ReviewState, Sensitivity, Vault
 
 /// A one-request Ollama look-alike on a loopback port.
 fn fake_ollama(reply_json: &'static str) -> (String, std::thread::JoinHandle<String>) {
+    fake_ollama_finishing(reply_json, "stop")
+}
+
+/// Like [`fake_ollama`], with a chosen `done_reason` — "length" is how a
+/// provider confesses it cut the reply off at the token budget.
+fn fake_ollama_finishing(
+    reply_json: &'static str,
+    done_reason: &'static str,
+) -> (String, std::thread::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = std::thread::spawn(move || {
@@ -34,7 +43,7 @@ fn fake_ollama(reply_json: &'static str) -> (String, std::thread::JoinHandle<Str
         reader.read_exact(&mut payload).unwrap();
         request.push_str(&String::from_utf8_lossy(&payload));
         let body = format!(
-            r#"{{"model":"test-model","message":{{"role":"assistant","content":{reply_json}}},"prompt_eval_count":50,"eval_count":9,"done":true}}"#
+            r#"{{"model":"test-model","message":{{"role":"assistant","content":{reply_json}}},"prompt_eval_count":50,"eval_count":9,"done":true,"done_reason":"{done_reason}"}}"#
         );
         write!(
             stream,
@@ -96,6 +105,21 @@ fn doc_id(h: &Harness) -> marius_model::DocumentId {
         .unwrap()
         .unwrap()
         .id
+}
+
+#[test]
+fn a_reply_cut_off_at_the_token_budget_does_not_keep_the_fragment() {
+    // The model was listing tags and ran out of tokens mid-word: the
+    // tail ("hardware/re…") is a fragment, not a tag, and must be
+    // dropped rather than stored (a real user got #hardware/re).
+    let (base, _server) =
+        fake_ollama_finishing(r#""[\"network/switches\", \"hardware/re""#, "length");
+    let mut h = harness(Some(base));
+    let id = doc_id(&h);
+
+    let result = h.app.suggest_tags(id, true).unwrap();
+    let names: Vec<&str> = result.applied.iter().map(|t| t.as_str()).collect();
+    assert_eq!(names, ["network/switches"], "{names:?}");
 }
 
 #[test]

@@ -40,6 +40,10 @@ pub struct ChatResponse {
     pub model: String,
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
+    /// The provider stopped generating because it hit the token budget
+    /// (`finish_reason`/`done_reason` "length"): the text's tail is a
+    /// cut-off fragment, not an answer, and parsers must not trust it.
+    pub truncated: bool,
 }
 
 /// A provider that can run a chat request, blocking the calling thread.

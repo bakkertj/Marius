@@ -114,6 +114,8 @@ impl ChatProvider for OpenAiCompatible {
         #[derive(Deserialize)]
         struct Choice {
             message: Message,
+            #[serde(default)]
+            finish_reason: Option<String>,
         }
         #[derive(Deserialize)]
         struct Message {
@@ -151,6 +153,7 @@ impl ChatProvider for OpenAiCompatible {
             model: reply.model.unwrap_or_else(|| model.to_owned()),
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
+            truncated: choice.finish_reason.as_deref() == Some("length"),
         })
     }
 }

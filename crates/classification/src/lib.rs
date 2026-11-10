@@ -64,7 +64,12 @@ pub fn tagging_request(
         system,
         user,
         temperature: 0.0,
-        max_tokens: Some(200),
+        // Tags are tiny, but reasoning models (gpt-oss and kin) spend
+        // output tokens thinking before they answer, and some gateways
+        // bill that thinking against max_tokens. A tight budget cut
+        // replies off mid-tag ("hardware/re"); tags cost little, so the
+        // headroom is cheap.
+        max_tokens: Some(2_000),
     }
 }
 
