@@ -1208,7 +1208,7 @@ impl Marius {
             .collect();
 
         let request =
-            marius_classification::tagging_request(&document.title, &text, &vocabulary, 8);
+            marius_classification::tagging_request(&document.title, &text, &vocabulary, 10);
 
         let client = match build_client(&choice, &profile) {
             Ok(client) => client,
@@ -1247,7 +1247,7 @@ impl Marius {
                 record.duration_ms = Some(clock.elapsed().as_millis() as u64);
                 inference::record(self.db.conn(), &record)?;
 
-                let mut suggestions = marius_classification::parse_suggestions(&response.text, 8);
+                let mut suggestions = marius_classification::parse_suggestions(&response.text, 12);
                 if response.truncated {
                     // The provider hit its token budget mid-reply: the last
                     // candidate is a cut-off fragment ("hardware/re"), not

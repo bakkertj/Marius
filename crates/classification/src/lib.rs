@@ -56,8 +56,11 @@ pub fn tagging_request(
          vendors, protocols, standards, organisations, places. \"tags\": \
          at most {max_tags} lowercase tag strings, most relevant first, \
          built from those names first — the words the author would type \
-         into search — then at most two broader topic tags. Use '/' for \
-         hierarchy (e.g. \"vendor/cisco\"). Reuse the vault's existing \
+         into search — then at most two broader topic tags. A bare name \
+         is a perfect tag (\"moog\", not \"org/moog\"): never force a \
+         category prefix onto a name, and never omit a name because no \
+         category fits it. Use '/' only for a hierarchy the author would \
+         navigate (e.g. \"projects/beacon\"). Reuse the vault's existing \
          tags when they genuinely fit; never force one. No commentary."
     );
     let mut user = if vocab.is_empty() {
@@ -164,15 +167,29 @@ fn extract_candidates(reply: &str) -> Vec<String> {
             .filter_map(|v| v.as_str().map(str::to_owned))
             .collect();
     }
-    // A JSON object with a tags-like field.
+    // A JSON object with a tags-like field. The "names" list is the
+    // extraction the tags were supposed to be built from — a part number
+    // or program name the model failed to carry into "tags" is still
+    // exactly what the author would search for, so it rides along after
+    // the tags (deduplication happens post-normalisation in the caller).
     if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(trimmed) {
-        for key in ["tags", "labels", "suggestions"] {
-            if let Some(serde_json::Value::Array(items)) = map.get(key) {
-                return items
+        let strings = |key: &str| -> Vec<String> {
+            match map.get(key) {
+                Some(serde_json::Value::Array(items)) => items
                     .iter()
                     .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect();
+                    .collect(),
+                _ => Vec::new(),
             }
+        };
+        let mut out: Vec<String> = ["tags", "labels", "suggestions"]
+            .into_iter()
+            .map(strings)
+            .find(|items| !items.is_empty())
+            .unwrap_or_default();
+        out.extend(strings("names"));
+        if !out.is_empty() {
+            return out;
         }
     }
 
@@ -296,15 +313,17 @@ mod tests {
     fn the_names_then_tags_object_reply_is_parsed() {
         // The prompt asks for {"names": [...], "tags": [...]} — naming
         // first is what makes models actually surface part numbers and
-        // program names. Only "tags" is the answer.
+        // program names. Tags come first; a name the model extracted but
+        // failed to carry into "tags" (seen live: LINK-on-CALE, VM42f)
+        // is appended rather than lost, duplicates collapsing.
         let got = parse_suggestions(
-            r#"{"names": ["Cisco C9200L-48P-4X-E", "Project Beacon"],
-                "tags": ["cisco-c9200l-48p-4x-e", "project-beacon", "networking"]}"#,
+            r#"{"names": ["Project Beacon", "LINK-on-CALE", "VM42f"],
+                "tags": ["project-beacon", "networking"]}"#,
             8,
         );
         assert_eq!(
             names(&got),
-            ["cisco-c9200l-48p-4x-e", "project-beacon", "networking"]
+            ["project-beacon", "networking", "link-on-cale", "vm42f"]
         );
     }
 
