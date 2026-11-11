@@ -1936,7 +1936,13 @@ impl Workspace {
                 .id(ix)
                 .pl(indent)
                 .pr(px(12.))
-                .py(px(4.))
+                // Same fixed single-line height as document rows: an
+                // element taller than its uniform_list slot steals the
+                // next row's clicks.
+                .h(px(26.))
+                .flex()
+                .items_center()
+                .overflow_hidden()
                 .cursor_pointer()
                 .bg(if selected {
                     theme.selected
@@ -1996,7 +2002,13 @@ impl Workspace {
                         .w(px(12.))
                         .child(if collapsed { "▸" } else { "▾" }),
                 )
-                .child(div().text_color(theme.text).child(name))
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .truncate()
+                        .text_color(theme.text)
+                        .child(name),
+                )
                 .child(
                     div()
                         .text_size(px(11.))
@@ -2006,6 +2018,9 @@ impl Workspace {
                 .on_mouse_down(
                     gpui::MouseButton::Left,
                     cx.listener(move |this: &mut Self, _e, _w, cx| {
+                        if ui_trace() {
+                            this.status = format!("click: row {ix} folder {path}").into();
+                        }
                         this.selected_row = ix;
                         tree::toggle(&mut this.collapsed, &path);
                         this.rebuild_tree(cx);
@@ -2022,7 +2037,15 @@ impl Workspace {
                     .id(ix)
                     .pl(indent + px(18.))
                     .pr(px(12.))
-                    .py(px(4.))
+                    // A fixed single-line row, title truncated: a long
+                    // imported filename used to wrap, and the oversized
+                    // row's hitbox swallowed every click meant for the
+                    // row below it (uniform_list slots are fixed-height;
+                    // the element must be too).
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .overflow_hidden()
                     .cursor_pointer()
                     .bg(if selected || open {
                         theme.selected
@@ -2031,7 +2054,7 @@ impl Workspace {
                     })
                     .hover(|style| style.bg(theme.hover))
                     .text_color(theme.text)
-                    .child(title)
+                    .child(div().truncate().child(title))
                     .on_drag(payload, move |dragged, _position, _window, cx| {
                         let ghost = DragGhost {
                             title: dragged.title.clone(),
@@ -2042,6 +2065,9 @@ impl Workspace {
                     .on_mouse_down(
                         gpui::MouseButton::Left,
                         cx.listener(move |this: &mut Self, _e, _w, cx| {
+                            if ui_trace() {
+                                this.status = format!("click: row {ix} doc {id}").into();
+                            }
                             this.selected_row = ix;
                             this.open(id, cx);
                         }),
@@ -2058,14 +2084,25 @@ impl Workspace {
             return div().into_any_element();
         };
         let is_selected = ix == self.selected_row || self.open_document == Some(row.id);
+        // Fixed height and clipped, like the tree rows: uniform_list slots
+        // are uniform, and an element that outgrows its slot (a wrapped
+        // title, a tall snippet) steals the clicks of the row below it.
         let mut item = div()
             .id(ix)
             .px(px(12.))
             .py(px(6.))
+            .h(px(64.))
+            .overflow_hidden()
             .cursor_pointer()
-            .child(div().text_color(theme.text).child(row.title.clone()))
             .child(
                 div()
+                    .truncate()
+                    .text_color(theme.text)
+                    .child(row.title.clone()),
+            )
+            .child(
+                div()
+                    .truncate()
                     .text_size(px(11.))
                     .text_color(theme.muted)
                     .child(row.path.clone()),
@@ -2890,6 +2927,14 @@ impl Render for Workspace {
             .children(self.render_palette(cx))
             .children(self.render_rename(cx))
     }
+}
+
+/// Opt-in UI event tracing (`MARIUS_UI_TRACE=1`): clicks print what the
+/// app thinks was clicked, into the status line. For chasing a Windows
+/// report of a tree row whose clicks vanish without a trace.
+fn ui_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MARIUS_UI_TRACE").is_some())
 }
 
 /// What on-screen hints print for the keymap's `{primary}` modifier:
