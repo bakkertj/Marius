@@ -38,10 +38,6 @@ actions!(
         NewNote,
         ReadingPageDown,
         ReadingPageUp,
-        ReadingLineDown,
-        ReadingLineUp,
-        ReadingHome,
-        ReadingEnd,
         OpenSelected,
         ReindexVault,
         ToggleReading,
@@ -102,17 +98,13 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         // Rename (and move) the open note; F2 is the convention
         // Windows fingers expect, and it is free on macOS too.
         KeyBinding::new("f2", RenameNote, None),
-        // Reading-mode paging, scoped to the reading pane's own focus:
-        // a bare spacebar binding anywhere wider would steal typing from
-        // the editor and the search box.
-        KeyBinding::new("pagedown", ReadingPageDown, Some("ReadingPane")),
-        KeyBinding::new("pageup", ReadingPageUp, Some("ReadingPane")),
-        KeyBinding::new("space", ReadingPageDown, Some("ReadingPane")),
-        KeyBinding::new("shift-space", ReadingPageUp, Some("ReadingPane")),
-        KeyBinding::new("down", ReadingLineDown, Some("ReadingPane")),
-        KeyBinding::new("up", ReadingLineUp, Some("ReadingPane")),
-        KeyBinding::new("home", ReadingHome, Some("ReadingPane")),
-        KeyBinding::new("end", ReadingEnd, Some("ReadingPane")),
+        // Context-free PageDown/PageUp as a belt-and-braces fallback:
+        // when the editor is focused its own context shadows these, and
+        // the workspace handler pages the reading view only in reading
+        // mode. (Space and arrows stay strictly pane-scoped — see
+        // preview::keybindings — because they are also typing keys.)
+        KeyBinding::new("pagedown", ReadingPageDown, None),
+        KeyBinding::new("pageup", ReadingPageUp, None),
         // Tabs (UI-006).
         KeyBinding::new(key(format!("{primary}-shift-t")), NewTab, None),
         KeyBinding::new(key(format!("{primary}-w")), CloseTab, None),
@@ -369,7 +361,6 @@ pub struct Workspace {
     /// note's path; Enter renames (and moves, when the path changes
     /// folder), Escape dismisses.
     rename_input: Entity<Editor>,
-    reading_focus: gpui::FocusHandle,
     rename_open: bool,
     /// The backlinks/related side panel (⌘B, UI-005): refreshed when
     /// the open document changes, not per frame.
@@ -417,7 +408,7 @@ impl Workspace {
             base: RefCell::new(None),
         });
         let preview =
-            cx.new(|_| Preview::new(theme, Box::new(ForwardingContext(preview_base.clone()))));
+            cx.new(|cx| Preview::new(theme, Box::new(ForwardingContext(preview_base.clone())), cx));
         cx.subscribe_in(&preview, window, Self::on_preview_event)
             .detach();
         let graph = cx.new(|_| GraphView::new(app.clone(), vault.id, theme));
@@ -495,7 +486,6 @@ impl Workspace {
             palette_items: None,
             palette_selected: 0,
             rename_input,
-            reading_focus: cx.focus_handle(),
             rename_open: false,
             pending_template: None,
             backlinks_open: false,
@@ -1199,7 +1189,8 @@ impl Workspace {
                     .update(cx, |preview, cx| preview.set_source(&text, cx));
                 // The editor leaves the tree; keys must land somewhere
                 // real or PageDown scrolls nothing.
-                window.focus(&self.reading_focus);
+                let handle = self.preview.read(cx).focus_handle();
+                window.focus(&handle);
                 ViewMode::Reading
             }
             ViewMode::Reading | ViewMode::Split | ViewMode::Graph | ViewMode::Settings => {
@@ -2796,6 +2787,16 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &RenameNote, window, cx| this.open_rename(window, cx)))
+            .on_action(cx.listener(|this, _: &ReadingPageDown, _w, cx| {
+                if this.mode == ViewMode::Reading {
+                    this.reading_scroll(0.9, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ReadingPageUp, _w, cx| {
+                if this.mode == ViewMode::Reading {
+                    this.reading_scroll(-0.9, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.close_tab(this.active_tab, window, cx)
@@ -2847,45 +2848,9 @@ impl Render for Workspace {
                                     .text_size(px(14.0 * self.zoom))
                                     .child(match self.mode {
                                         ViewMode::Edit => self.editor.clone().into_any_element(),
-                                        ViewMode::Reading => div()
-                                            .id("reading-pane")
-                                            .size_full()
-                                            .track_focus(&self.reading_focus)
-                                            .key_context("ReadingPane")
-                                            .on_action(cx.listener(
-                                                |this, _: &ReadingPageDown, _w, cx| {
-                                                    this.reading_scroll(0.9, cx)
-                                                },
-                                            ))
-                                            .on_action(cx.listener(
-                                                |this, _: &ReadingPageUp, _w, cx| {
-                                                    this.reading_scroll(-0.9, cx)
-                                                },
-                                            ))
-                                            .on_action(cx.listener(
-                                                |this, _: &ReadingLineDown, _w, cx| {
-                                                    this.reading_scroll(0.1, cx)
-                                                },
-                                            ))
-                                            .on_action(cx.listener(
-                                                |this, _: &ReadingLineUp, _w, cx| {
-                                                    this.reading_scroll(-0.1, cx)
-                                                },
-                                            ))
-                                            .on_action(cx.listener(
-                                                |this, _: &ReadingHome, _w, cx| {
-                                                    this.preview
-                                                        .update(cx, |p, cx| p.scroll_to_top(cx));
-                                                },
-                                            ))
-                                            .on_action(cx.listener(
-                                                |this, _: &ReadingEnd, _w, cx| {
-                                                    this.preview
-                                                        .update(cx, |p, cx| p.scroll_to_end(cx));
-                                                },
-                                            ))
-                                            .child(self.preview.clone())
-                                            .into_any_element(),
+                                        ViewMode::Reading => {
+                                            self.preview.clone().into_any_element()
+                                        }
                                         ViewMode::Split => div()
                                             .flex()
                                             .flex_row()

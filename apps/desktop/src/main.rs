@@ -78,6 +78,7 @@ fn main() -> Result<()> {
     Application::new().run(move |cx: &mut App| {
         let mut bindings = marius_ui::editor::key_bindings();
         bindings.extend(marius_ui::workspace::key_bindings());
+        bindings.extend(marius_ui::preview::keybindings());
         cx.bind_keys(bindings);
 
         let bounds = Bounds::centered(None, size(px(1180.), px(760.)), cx);

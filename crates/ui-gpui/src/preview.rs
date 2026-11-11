@@ -19,10 +19,31 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use gpui::{
-    div, img, point, prelude::*, px, Context, ElementId, EventEmitter, FontStyle, FontWeight,
-    HighlightStyle, InteractiveText, ScrollHandle, SharedString, StrikethroughStyle, StyledText,
-    UnderlineStyle, Window,
+    actions, div, img, point, prelude::*, px, Context, ElementId, EventEmitter, FocusHandle,
+    FontStyle, FontWeight, HighlightStyle, InteractiveText, KeyBinding, ScrollHandle, SharedString,
+    StrikethroughStyle, StyledText, UnderlineStyle, Window,
 };
+
+actions!(
+    reading,
+    [PageDown, PageUp, LineDown, LineUp, GoTop, GoBottom]
+);
+
+/// Bindings live on the pane's own focus; a bare spacebar anywhere
+/// wider would steal typing from the editor and the search box.
+pub fn keybindings() -> Vec<KeyBinding> {
+    const CTX: Option<&str> = Some("ReadingPane");
+    vec![
+        KeyBinding::new("pagedown", PageDown, CTX),
+        KeyBinding::new("pageup", PageUp, CTX),
+        KeyBinding::new("space", PageDown, CTX),
+        KeyBinding::new("shift-space", PageUp, CTX),
+        KeyBinding::new("down", LineDown, CTX),
+        KeyBinding::new("up", LineUp, CTX),
+        KeyBinding::new("home", GoTop, CTX),
+        KeyBinding::new("end", GoBottom, CTX),
+    ]
+}
 use marius_markdown::rewrite::{apply, Edit};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
@@ -588,19 +609,26 @@ pub struct Preview {
     /// The reading pane's scroll position, held so the keyboard can
     /// drive it (the wheel goes through gpui's own handling).
     scroll: ScrollHandle,
+    /// Focus for reading mode, so the paging keys land here.
+    focus: FocusHandle,
 }
 
 impl EventEmitter<PreviewEvent> for Preview {}
 
 impl Preview {
-    pub fn new(theme: Theme, context: Box<dyn PreviewContext>) -> Self {
+    pub fn new(theme: Theme, context: Box<dyn PreviewContext>, cx: &mut Context<Self>) -> Self {
         Self {
             theme,
             blocks: Vec::new(),
             context,
             zoom: 1.0,
             scroll: ScrollHandle::new(),
+            focus: cx.focus_handle(),
         }
+    }
+
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus.clone()
     }
 
     /// Jump back to the top — a different document must not inherit the
@@ -1040,6 +1068,14 @@ impl Render for Preview {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
+            .track_focus(&self.focus)
+            .key_context("ReadingPane")
+            .on_action(cx.listener(|this, _: &PageDown, _w, cx| this.scroll_pages(0.9, cx)))
+            .on_action(cx.listener(|this, _: &PageUp, _w, cx| this.scroll_pages(-0.9, cx)))
+            .on_action(cx.listener(|this, _: &LineDown, _w, cx| this.scroll_pages(0.1, cx)))
+            .on_action(cx.listener(|this, _: &LineUp, _w, cx| this.scroll_pages(-0.1, cx)))
+            .on_action(cx.listener(|this, _: &GoTop, _w, cx| this.scroll_to_top(cx)))
+            .on_action(cx.listener(|this, _: &GoBottom, _w, cx| this.scroll_to_end(cx)))
             .bg(theme.background)
             .text_color(theme.text)
             .text_size(px(15.0 * self.zoom))
