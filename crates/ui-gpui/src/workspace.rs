@@ -1921,6 +1921,12 @@ impl Workspace {
     fn render_tree_row(&mut self, ix: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = self.theme;
         let Some(row) = self.tree.get(ix).cloned() else {
+            if ui_trace() {
+                eprintln!(
+                    "TRACE render row {ix}: OUT OF RANGE (tree len {})",
+                    self.tree.len()
+                );
+            }
             return div().into_any_element();
         };
         let selected = ix == self.selected_row;
@@ -1936,13 +1942,10 @@ impl Workspace {
                 .id(ix)
                 .pl(indent)
                 .pr(px(12.))
-                // Same fixed single-line height as document rows: an
-                // element taller than its uniform_list slot steals the
-                // next row's clicks.
-                .h(px(26.))
-                .flex()
-                .items_center()
-                .overflow_hidden()
+                // Content-sized like document rows (see there); the name
+                // is truncated so it can never wrap taller than the
+                // list's measured slot.
+                .py(px(4.))
                 .cursor_pointer()
                 .bg(if selected {
                     theme.selected
@@ -2019,6 +2022,7 @@ impl Workspace {
                     gpui::MouseButton::Left,
                     cx.listener(move |this: &mut Self, _e, _w, cx| {
                         if ui_trace() {
+                            eprintln!("TRACE click folder row {ix} {path}");
                             this.status = format!("click: row {ix} folder {path}").into();
                         }
                         this.selected_row = ix;
@@ -2037,15 +2041,15 @@ impl Workspace {
                     .id(ix)
                     .pl(indent + px(18.))
                     .pr(px(12.))
-                    // A fixed single-line row, title truncated: a long
-                    // imported filename used to wrap, and the oversized
-                    // row's hitbox swallowed every click meant for the
-                    // row below it (uniform_list slots are fixed-height;
-                    // the element must be too).
-                    .h(px(26.))
-                    .flex()
-                    .items_center()
-                    .overflow_hidden()
+                    // Single line, truncated — and CONTENT-sized, never a
+                    // fixed height: uniform_list derives its slot pitch by
+                    // measuring an item, so an element styled taller than
+                    // its own measure puts every hitbox on a different
+                    // grid than the painted labels (clicks then land one
+                    // row off — proven with MARIUS_UI_TRACE). A wrapped
+                    // two-line title caused the original misalignment;
+                    // truncation alone is the whole fix.
+                    .py(px(4.))
                     .cursor_pointer()
                     .bg(if selected || open {
                         theme.selected
@@ -2066,6 +2070,7 @@ impl Workspace {
                         gpui::MouseButton::Left,
                         cx.listener(move |this: &mut Self, _e, _w, cx| {
                             if ui_trace() {
+                                eprintln!("TRACE click doc row {ix} id {id}");
                                 this.status = format!("click: row {ix} doc {id}").into();
                             }
                             this.selected_row = ix;
@@ -2084,15 +2089,20 @@ impl Workspace {
             return div().into_any_element();
         };
         let is_selected = ix == self.selected_row || self.open_document == Some(row.id);
-        // Fixed height and clipped, like the tree rows: uniform_list slots
-        // are uniform, and an element that outgrows its slot (a wrapped
-        // title, a tall snippet) steals the clicks of the row below it.
-        let mut item = div()
+        // Every row renders the same three single-line children — title,
+        // path, snippet (blank when absent) — so uniform_list's measured
+        // slot matches every element exactly. A row shaped differently
+        // from the measured one puts hitboxes on a different grid than
+        // the painted labels, and clicks land one row off.
+        let snippet: SharedString = row
+            .snippet
+            .clone()
+            .map(|s| s.replace(['\n', '\r'], " ").into())
+            .unwrap_or_else(|| " ".into());
+        let item = div()
             .id(ix)
             .px(px(12.))
             .py(px(6.))
-            .h(px(64.))
-            .overflow_hidden()
             .cursor_pointer()
             .child(
                 div()
@@ -2106,15 +2116,14 @@ impl Workspace {
                     .text_size(px(11.))
                     .text_color(theme.muted)
                     .child(row.path.clone()),
-            );
-        if let Some(snippet) = &row.snippet {
-            item = item.child(
+            )
+            .child(
                 div()
+                    .truncate()
                     .text_size(px(11.))
                     .text_color(theme.muted)
-                    .child(snippet.clone()),
+                    .child(snippet),
             );
-        }
         let id = row.id;
         item.bg(if is_selected {
             theme.selected
