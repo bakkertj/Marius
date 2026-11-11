@@ -936,6 +936,11 @@ impl Workspace {
 
     fn open(&mut self, id: DocumentId, cx: &mut Context<Self>) {
         if self.open_document == Some(id) {
+            // Say so instead of doing nothing: a silent early return made
+            // a real bug (a click that appeared to be ignored) impossible
+            // to tell apart from a click that never landed.
+            self.status = format!("already showing {}", self.open_path).into();
+            cx.notify();
             return;
         }
         self.autosave(cx);
