@@ -175,12 +175,46 @@ fn normalise_extracted(text: &str) -> String {
             .filter(|l| !l.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
-        if !joined.is_empty() {
-            out.push_str(&joined);
+        // Extractors often emit a whole document with single newlines,
+        // which the join above would weld into one colossal paragraph —
+        // unreadable, and heavy enough to upset text layout. Break it
+        // into digestible paragraphs at word boundaries.
+        for chunk in split_at_words(&joined, 1_500) {
+            out.push_str(chunk);
             out.push_str("\n\n");
         }
     }
     out.trim().to_owned()
+}
+
+/// The nearest char boundary at or after `at` (MSRV-friendly stand-in
+/// for `str::ceil_char_boundary`).
+fn boundary_at_or_after(text: &str, mut at: usize) -> usize {
+    while at < text.len() && !text.is_char_boundary(at) {
+        at += 1;
+    }
+    at.min(text.len())
+}
+
+/// Split at the last whitespace before each `limit`-char window; a
+/// single unbroken token longer than the limit stays whole.
+fn split_at_words(text: &str, limit: usize) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut rest = text.trim();
+    while rest.len() > limit {
+        let window = &rest[..boundary_at_or_after(rest, limit)];
+        match window.rfind(char::is_whitespace) {
+            Some(at) if at > 0 => {
+                parts.push(rest[..at].trim_end());
+                rest = rest[at..].trim_start();
+            }
+            _ => break,
+        }
+    }
+    if !rest.is_empty() {
+        parts.push(rest);
+    }
+    parts
 }
 
 fn note(title: &str, kind: &str, body: &str) -> ImportedNote {

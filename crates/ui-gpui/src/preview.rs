@@ -167,7 +167,55 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
         | Options::ENABLE_MATH
         | Options::ENABLE_GFM;
     let mut parser = Parser::new_ext(body, options);
-    collect_blocks(&mut parser, None)
+    let blocks = collect_blocks(&mut parser, None);
+    // A PDF import used to weld whole documents into one paragraph, and
+    // existing notes still carry them. One colossal text run is heavy
+    // enough to upset layout (a user's reading view scrolled only part
+    // way); a plain paragraph splits losslessly at word boundaries.
+    blocks
+        .into_iter()
+        .flat_map(|block| match block {
+            Block::Paragraph(inline)
+                if inline.text.len() > 4_000
+                    && inline.spans.is_empty()
+                    && inline.links.is_empty() =>
+            {
+                split_plain_paragraph(&inline.text)
+            }
+            other => vec![other],
+        })
+        .collect()
+}
+
+/// Break an unstyled paragraph into ~2,000-char pieces at whitespace.
+fn split_plain_paragraph(text: &str) -> Vec<Block> {
+    let mut out = Vec::new();
+    let mut rest = text.trim();
+    while rest.len() > 2_000 {
+        let boundary = {
+            let mut at = 2_000;
+            while at < rest.len() && !rest.is_char_boundary(at) {
+                at += 1;
+            }
+            at.min(rest.len())
+        };
+        let window = &rest[..boundary];
+        let Some(at) = window.rfind(char::is_whitespace).filter(|&a| a > 0) else {
+            break;
+        };
+        out.push(Block::Paragraph(Inline {
+            text: rest[..at].trim_end().to_owned(),
+            ..Inline::default()
+        }));
+        rest = rest[at..].trim_start();
+    }
+    if !rest.is_empty() {
+        out.push(Block::Paragraph(Inline {
+            text: rest.to_owned(),
+            ..Inline::default()
+        }));
+    }
+    out
 }
 
 /// Collect blocks until the given end tag (or the end of input).
@@ -1098,6 +1146,26 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     // ------------------------------------------------------------- wikify
+
+    #[test]
+    fn a_colossal_pdf_paragraph_is_split_into_scrollable_pieces() {
+        // The shape an old PDF import left behind: one paragraph the
+        // size of the whole document.
+        let body = "word ".repeat(4_000);
+        let blocks = parse_blocks(&body);
+        assert!(blocks.len() > 5, "{} block(s)", blocks.len());
+        let total: usize = blocks
+            .iter()
+            .map(|b| match b {
+                Block::Paragraph(i) => i.text.split_whitespace().count(),
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(total, 4_000, "no words lost in the split");
+        // A styled paragraph is never split: ranges must stay valid.
+        let styled = format!("**bold** {}", "word ".repeat(2_000));
+        assert!(parse_blocks(&styled).len() < 3);
+    }
 
     #[test]
     fn wiki_links_become_schemed_links_with_display_text() {
