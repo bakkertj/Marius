@@ -405,8 +405,14 @@ mod tests {
         assert_eq!(names, vec![Config::FILE_NAME]);
     }
 
+    /// Both data-dir tests mutate the same process-wide variable; run
+    /// in parallel they race (caught once on Windows CI). The lock
+    /// serialises them; a poisoned lock is fine, the state is restored.
+    static DATA_DIR_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn the_data_directory_is_overridable_for_tests_and_portable_installs() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
         // Relied upon by the integration tests and by anyone running Marius
         // from a USB stick.
         let previous = std::env::var("MARIUS_DATA_DIR").ok();
@@ -422,6 +428,7 @@ mod tests {
 
     #[test]
     fn the_default_data_directory_follows_platform_convention() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var("MARIUS_DATA_DIR").ok();
         unsafe { std::env::remove_var("MARIUS_DATA_DIR") };
         let dir = default_data_dir();
